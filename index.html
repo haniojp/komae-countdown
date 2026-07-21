@@ -264,7 +264,9 @@ async function refreshAll() {
     const position = await getAccuratePosition();
     state.position = position;
     renderPosition(position);
-    await renderPlaceName(position);
+
+    // 地名取得は経路検索と並行実行する。失敗・遅延しても本体を止めない。
+    renderPlaceNameWithTimeout(position);
 
     const accuracy = Math.round(position.coords.accuracy);
     setStatus(
@@ -327,7 +329,21 @@ function loadMaps(key) {
       "?key=" + encodeURIComponent(key) +
       "&v=weekly&loading=async&language=ja&region=JP" +
       "&callback=" + callbackName;
-    script.onerror = () => reject(new Error("Google Maps JavaScript APIを読み込めませんでした。APIキーと制限設定を確認してください。"));
+    const loadTimeout = window.setTimeout(() => {
+      reject(new Error("Google Maps機能の読み込みがタイムアウトしました。API設定を確認してください。"));
+    }, 15000);
+
+    script.onerror = () => {
+      window.clearTimeout(loadTimeout);
+      reject(new Error("Google Maps JavaScript APIを読み込めませんでした。APIキーと制限設定を確認してください。"));
+    };
+
+    const originalCallback = window[callbackName];
+    window[callbackName] = async () => {
+      window.clearTimeout(loadTimeout);
+      await originalCallback();
+    };
+
     document.head.appendChild(script);
   }).finally(() => {
     if (!state.mapsLoaded) state.mapsLoading = null;
@@ -518,6 +534,21 @@ function renderPosition(position) {
   els.accuracy.textContent = `測位精度：約${Math.round(accuracy)}m`;
 }
 
+function renderPlaceNameWithTimeout(position) {
+  const timeoutId = window.setTimeout(() => {
+    if (els.location.textContent === "地名を確認中…") {
+      els.location.textContent = "地名を取得できません";
+    }
+  }, 6000);
+
+  renderPlaceName(position)
+    .catch(error => {
+      console.warn("Reverse geocoding failed:", error);
+      els.location.textContent = "地名を取得できません";
+    })
+    .finally(() => window.clearTimeout(timeoutId));
+}
+
 async function renderPlaceName(position) {
   if (!state.geocoder) {
     els.location.textContent = "現在地を取得済み";
@@ -529,26 +560,21 @@ async function renderPlaceName(position) {
     lng: position.coords.longitude
   };
 
-  try {
-    const response = await state.geocoder.geocode({
-      location,
-      language: "ja",
-      region: "JP"
-    });
+  const response = await state.geocoder.geocode({
+    location,
+    language: "ja",
+    region: "JP"
+  });
 
-    const results = response.results || [];
-    if (!results.length) {
-      els.location.textContent = "地名を取得できません";
-      return;
-    }
-
-    const placeName = buildJapanesePlaceName(results);
-    els.location.textContent =
-      placeName || results[0].formattedAddress || "地名を取得できません";
-  } catch (error) {
-    console.warn("Reverse geocoding failed:", error);
+  const results = response.results || [];
+  if (!results.length) {
     els.location.textContent = "地名を取得できません";
+    return;
   }
+
+  const placeName = buildJapanesePlaceName(results);
+  els.location.textContent =
+    placeName || results[0].formatted_address || "地名を取得できません";
 }
 
 function buildJapanesePlaceName(results) {
@@ -735,7 +761,7 @@ function humanizeError(error) {
     return "APIキーのウェブサイト制限に、このGitHub PagesのURLが登録されていません。";
   }
   if (/ApiNotActivated|not activated/i.test(message)) {
-    return "Google CloudでMaps JavaScript APIまたはRoutes APIが有効になっていません。";
+    return "Google CloudでMaps JavaScript API、Routes API、Geocoding APIのいずれかが有効になっていません。";
   }
   if (/BillingNotEnabled|billing/i.test(message)) {
     return "Google Cloudプロジェクトの請求先設定を確認してください。";
