@@ -152,7 +152,7 @@
       <div class="dialog-head"><h2>Google APIキー設定</h2><button id="closeDialog" class="close">×</button></div>
       <label for="apiKey">Maps JavaScript APIキー</label>
       <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="AIza...">
-      <p class="note">この端末のSafari内だけに保存します。Google Cloud側で「ウェブサイト（HTTPリファラー）」制限を設定し、このGitHub PagesのURLだけを許可してください。</p>
+      <p class="note">この端末のSafari内だけに保存します。Google Cloud側でウェブサイト制限を設定し、Maps JavaScript API、Routes API、Geocoding API、Places API（New）だけを許可してください。</p>
       <div class="dialog-actions">
         <button id="clearKey" class="smallbtn ghost">削除</button>
         <button id="saveKey" class="smallbtn save">保存</button>
@@ -164,6 +164,10 @@
 "use strict";
 
 const KEY_STORAGE = "komaeBoundMapsJsKey";
+const DESTINATION_NAME = "狛江駅";
+const DESTINATION_QUERY = "狛江駅, 東京都狛江市, 日本";
+const MINIMUM_LEAVE_SECONDS = 180;
+
 const els = {
   settingsButton: document.getElementById("settingsButton"),
   settingsDialog: document.getElementById("settingsDialog"),
@@ -192,6 +196,8 @@ const state = {
   Route: null,
   Geocoder: null,
   geocoder: null,
+  Place: null,
+  SearchNearbyRankPreference: null,
   position: null,
   result: null,
   busy: false,
@@ -204,15 +210,18 @@ els.closeDialog.addEventListener("click", () => els.settingsDialog.close());
 els.saveKey.addEventListener("click", saveApiKey);
 els.clearKey.addEventListener("click", clearApiKey);
 els.refreshButton.addEventListener("click", refreshAll);
+
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") updateCountdown();
 });
-setInterval(updateCountdown, 1000);
+
+window.setInterval(updateCountdown, 1000);
 
 window.addEventListener("load", () => {
   els.apiKey.value = localStorage.getItem(KEY_STORAGE) || "";
+
   if (!els.apiKey.value) {
-    setTimeout(openSettings, 250);
+    window.setTimeout(openSettings, 250);
   } else {
     setStatus("位置情報を取得してください。", "info");
     els.hint.textContent = "位置情報を更新してください";
@@ -226,10 +235,15 @@ function openSettings() {
 
 function saveApiKey() {
   const key = els.apiKey.value.trim();
+
   if (!/^AIza[0-9A-Za-z_-]{20,}$/.test(key)) {
-    setStatus("APIキーの形式を確認してください。通常は「AIza」で始まります。", "warning");
+    setStatus(
+      "APIキーの形式を確認してください。通常は「AIza」で始まります。",
+      "warning"
+    );
     return;
   }
+
   localStorage.setItem(KEY_STORAGE, key);
   els.settingsDialog.close();
   setStatus("APIキーを保存しました。位置情報を更新してください。", "success");
@@ -246,6 +260,7 @@ async function refreshAll() {
   if (state.busy) return;
 
   const key = localStorage.getItem(KEY_STORAGE) || "";
+
   if (!key) {
     openSettings();
     setStatus("先にGoogle APIキーを設定してください。", "warning");
@@ -265,27 +280,28 @@ async function refreshAll() {
     state.position = position;
     renderPosition(position);
 
-    // 地名取得は経路検索と並行実行する。失敗・遅延しても本体を止めない。
+    // 地名取得は経路検索と並行して行い、遅延しても本体を止めない。
     renderPlaceNameWithTimeout(position);
 
-    const accuracy = Math.round(position.coords.accuracy);
-    setStatus(
-      accuracy <= 100
-        ? "現在地を取得しました。狛江駅までの経路を検索しています…"
-        : `現在地は取得できましたが、精度は約${accuracy}mです。経路を検索します。`,
-      accuracy <= 100 ? "info" : "warning"
-    );
+    setStatus("現在地周辺から最寄りの鉄道駅を検索しています…", "info");
 
-    const result = await findUsableRoute(position, 180);
+    const result = await buildTripPlan(position, MINIMUM_LEAVE_SECONDS);
     state.result = result;
+
     renderResult(result);
     updateCountdown();
-    setStatus(
-      result.mode === "WALKING"
-        ? "狛江駅が近いため、徒歩経路へ切り替えました。"
-        : `経路を更新しました。最初の乗車駅は${result.station}です。`,
-      "success"
-    );
+
+    if (result.mode === "WALK_TO_DESTINATION") {
+      setStatus(
+        "目的地の狛江駅が最寄り駅のため、徒歩経路を表示しました。",
+        "success"
+      );
+    } else {
+      setStatus(
+        `最寄り駅は${result.station.name}です。次の利用可能な電車を取得しました。`,
+        "success"
+      );
+    }
   } catch (error) {
     console.error(error);
     setStatus(humanizeError(error), "error");
@@ -298,20 +314,37 @@ async function refreshAll() {
 }
 
 function loadMaps(key) {
-  if (state.mapsLoaded && state.Route) return Promise.resolve();
+  if (
+    state.mapsLoaded &&
+    state.Route &&
+    state.Place &&
+    state.SearchNearbyRankPreference
+  ) {
+    return Promise.resolve();
+  }
+
   if (state.mapsLoading) return state.mapsLoading;
 
   state.mapsLoading = new Promise((resolve, reject) => {
     const callbackName = "__komaeMapsReady";
+
     window[callbackName] = async () => {
       try {
-        const [{ Route }, { Geocoder }] = await Promise.all([
+        const [
+          { Route },
+          { Geocoder },
+          { Place, SearchNearbyRankPreference }
+        ] = await Promise.all([
           google.maps.importLibrary("routes"),
-          google.maps.importLibrary("geocoding")
+          google.maps.importLibrary("geocoding"),
+          google.maps.importLibrary("places")
         ]);
+
         state.Route = Route;
         state.Geocoder = Geocoder;
         state.geocoder = new Geocoder();
+        state.Place = Place;
+        state.SearchNearbyRankPreference = SearchNearbyRankPreference;
         state.mapsLoaded = true;
         resolve();
       } catch (error) {
@@ -329,16 +362,26 @@ function loadMaps(key) {
       "?key=" + encodeURIComponent(key) +
       "&v=weekly&loading=async&language=ja&region=JP" +
       "&callback=" + callbackName;
+
     const loadTimeout = window.setTimeout(() => {
-      reject(new Error("Google Maps機能の読み込みがタイムアウトしました。API設定を確認してください。"));
+      reject(
+        new Error(
+          "Google Maps機能の読み込みがタイムアウトしました。API設定を確認してください。"
+        )
+      );
     }, 15000);
 
     script.onerror = () => {
       window.clearTimeout(loadTimeout);
-      reject(new Error("Google Maps JavaScript APIを読み込めませんでした。APIキーと制限設定を確認してください。"));
+      reject(
+        new Error(
+          "Google Maps JavaScript APIを読み込めませんでした。APIキーと制限設定を確認してください。"
+        )
+      );
     };
 
     const originalCallback = window[callbackName];
+
     window[callbackName] = async () => {
       window.clearTimeout(loadTimeout);
       await originalCallback();
@@ -364,12 +407,18 @@ function getAccuratePosition() {
     let watchId = null;
     let timeoutId = null;
 
-    const finish = (fn, value) => {
+    const finish = (callback, value) => {
       if (finished) return;
       finished = true;
-      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-      if (timeoutId !== null) clearTimeout(timeoutId);
-      fn(value);
+
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+
+      callback(value);
     };
 
     watchId = navigator.geolocation.watchPosition(
@@ -378,160 +427,347 @@ function getAccuratePosition() {
           best = position;
           renderPosition(position);
         }
-        if (position.coords.accuracy <= 100) finish(resolve, position);
+
+        if (position.coords.accuracy <= 100) {
+          finish(resolve, position);
+        }
       },
       error => {
-        if (best) finish(resolve, best);
-        else finish(reject, geoError(error));
+        if (best) {
+          finish(resolve, best);
+        } else {
+          finish(reject, geoError(error));
+        }
       },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 30000
+      }
     );
 
-    timeoutId = setTimeout(() => {
-      if (best) finish(resolve, best);
-      else finish(reject, new Error("現在地を取得できませんでした。位置情報の許可と通信状態を確認してください。"));
+    timeoutId = window.setTimeout(() => {
+      if (best) {
+        finish(resolve, best);
+      } else {
+        finish(
+          reject,
+          new Error(
+            "現在地を取得できませんでした。位置情報の許可と通信状態を確認してください。"
+          )
+        );
+      }
     }, 16000);
   });
 }
 
-async function findUsableRoute(position, minimumSeconds) {
+async function buildTripPlan(position, minimumLeaveSeconds) {
   const origin = {
     lat: position.coords.latitude,
     lng: position.coords.longitude
   };
 
-  let parsed = await computeAndParse(origin, new Date());
-  let selected = selectRoute(parsed, minimumSeconds);
+  const station = await findNearestRailStation(origin);
+  const walking = await computeWalkingRoute(origin, station.location);
 
-  if (!selected) {
-    parsed = parsed.concat(
-      await computeAndParse(origin, new Date(Date.now() + 10 * 60 * 1000))
-    );
-    selected = selectRoute(parsed, minimumSeconds);
+  if (isKomaeStation(station.name)) {
+    const arrival = new Date(Date.now() + walking.durationMs);
+
+    return {
+      mode: "WALK_TO_DESTINATION",
+      station,
+      walkingMs: walking.durationMs,
+      departure: null,
+      arrival,
+      leaveBy: null,
+      homeArrival: new Date(arrival.getTime() + 10 * 60 * 1000),
+      segments: []
+    };
   }
 
-  if (!selected) selected = selectRoute(parsed, -Infinity);
+  const transitRoutes = await findTransitRoutes(
+    station,
+    walking.durationMs,
+    minimumLeaveSeconds
+  );
 
-  if (!selected) {
-    const walking = await computeWalkingRoute(origin);
-    if (walking) return walking;
-  }
+  const selected = selectBestTransitRoute(transitRoutes);
 
   if (!selected) {
     throw new Error(
-      "現在地から狛江駅までの公共交通・徒歩経路を取得できませんでした。"
+      `最寄り駅は${station.name}ですが、同駅から狛江駅までの鉄道経路を取得できませんでした。`
     );
   }
 
   return selected;
 }
 
-async function computeWalkingRoute(origin) {
+async function findNearestRailStation(origin) {
+  const searchRadii = [3000, 10000, 30000];
+  const railPrimaryTypes = [
+    "train_station",
+    "subway_station",
+    "light_rail_station"
+  ];
+
+  for (const radius of searchRadii) {
+    const candidates = await searchNearbyStations(
+      origin,
+      radius,
+      railPrimaryTypes
+    );
+
+    if (candidates.length > 0) {
+      return candidates[0];
+    }
+  }
+
+  // 一部の駅が transit_station として登録されている場合の補完。
+  for (const radius of searchRadii) {
+    const candidates = await searchNearbyStations(
+      origin,
+      radius,
+      ["transit_station"]
+    );
+
+    const stationLike = candidates.filter(candidate =>
+      candidate.name.includes("駅")
+    );
+
+    if (stationLike.length > 0) {
+      return stationLike[0];
+    }
+  }
+
+  throw new Error(
+    "現在地周辺に鉄道駅を見つけられませんでした。Places API（New）の設定を確認してください。"
+  );
+}
+
+async function searchNearbyStations(origin, radius, primaryTypes) {
   const request = {
+    fields: [
+      "id",
+      "displayName",
+      "location",
+      "formattedAddress",
+      "types",
+      "primaryType"
+    ],
+    locationRestriction: {
+      center: origin,
+      radius
+    },
+    includedPrimaryTypes: primaryTypes,
+    maxResultCount: 20,
+    rankPreference: state.SearchNearbyRankPreference.DISTANCE
+  };
+
+  const response = await state.Place.searchNearby(request);
+  const places = response.places || [];
+
+  return places
+    .map(place => placeToStation(place, origin))
+    .filter(Boolean)
+    .sort((a, b) => a.distanceMeters - b.distanceMeters);
+}
+
+function placeToStation(place, origin) {
+  const location = toLatLngLiteral(place.location);
+  if (!location) return null;
+
+  const displayName =
+    typeof place.displayName === "string"
+      ? place.displayName
+      : place.displayName?.text || "";
+
+  if (!displayName) return null;
+
+  return {
+    id: place.id || null,
+    name: normalizeStationName(displayName),
+    location,
+    formattedAddress: place.formattedAddress || "",
+    types: Array.isArray(place.types) ? place.types : [],
+    primaryType: place.primaryType || "",
+    distanceMeters: haversineMeters(origin, location)
+  };
+}
+
+function normalizeStationName(name) {
+  const trimmed = String(name).trim();
+  return trimmed.endsWith("駅") ? trimmed : `${trimmed}駅`;
+}
+
+function toLatLngLiteral(location) {
+  if (!location) return null;
+
+  const lat =
+    typeof location.lat === "function" ? location.lat() : Number(location.lat);
+  const lng =
+    typeof location.lng === "function" ? location.lng() : Number(location.lng);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+  return { lat, lng };
+}
+
+function haversineMeters(a, b) {
+  const earthRadius = 6371000;
+  const toRadians = degrees => (degrees * Math.PI) / 180;
+
+  const lat1 = toRadians(a.lat);
+  const lat2 = toRadians(b.lat);
+  const deltaLat = toRadians(b.lat - a.lat);
+  const deltaLng = toRadians(b.lng - a.lng);
+
+  const value =
+    Math.sin(deltaLat / 2) ** 2 +
+    Math.cos(lat1) *
+      Math.cos(lat2) *
+      Math.sin(deltaLng / 2) ** 2;
+
+  return 2 * earthRadius * Math.asin(Math.sqrt(value));
+}
+
+async function computeWalkingRoute(origin, destination) {
+  const response = await state.Route.computeRoutes({
     origin,
-    destination: "狛江駅, 東京都狛江市, 日本",
+    destination,
     travelMode: "WALKING",
     computeAlternativeRoutes: false,
     fields: ["legs", "durationMillis", "distanceMeters", "localizedValues"]
-  };
+  });
 
-  const response = await state.Route.computeRoutes(request);
   const route = (response.routes || [])[0];
-  if (!route) return null;
 
-  const durationMs = Number(route.durationMillis) ||
+  if (!route) {
+    throw new Error("現在地から最寄り駅までの徒歩経路を取得できませんでした。");
+  }
+
+  const durationMs =
+    Number(route.durationMillis) ||
     (route.legs || []).reduce(
       (sum, leg) => sum + (Number(leg.durationMillis) || 0),
       0
     );
 
-  if (!Number.isFinite(durationMs) || durationMs <= 0) return null;
+  if (!Number.isFinite(durationMs) || durationMs < 0) {
+    throw new Error("最寄り駅までの徒歩所要時間を計算できませんでした。");
+  }
 
   return {
-    mode: "WALKING",
-    station: "狛江駅",
-    walkingMs: durationMs,
-    departure: null,
-    arrival: new Date(Date.now() + durationMs),
-    leaveBy: null,
-    homeArrival: new Date(Date.now() + durationMs + 10 * 60 * 1000),
-    segments: [],
-    arrivalSort: Date.now() + durationMs
+    durationMs,
+    distanceMeters: Number(route.distanceMeters) || null
   };
 }
 
-async function computeAndParse(origin, departureTime) {
-  const request = {
-    origin,
-    destination: "狛江駅, 東京都狛江市, 日本",
+async function findTransitRoutes(
+  station,
+  walkingMs,
+  minimumLeaveSeconds
+) {
+  const earliestStationArrival = new Date(
+    Date.now() + walkingMs + minimumLeaveSeconds * 1000
+  );
+
+  let routes = await computeTransitRoutes(
+    station,
+    walkingMs,
+    earliestStationArrival
+  );
+
+  if (routes.length === 0) {
+    const later = new Date(earliestStationArrival.getTime() + 15 * 60 * 1000);
+    routes = await computeTransitRoutes(station, walkingMs, later);
+  }
+
+  return routes;
+}
+
+async function computeTransitRoutes(station, walkingMs, departureTime) {
+  const response = await state.Route.computeRoutes({
+    origin: station.location,
+    destination: DESTINATION_QUERY,
     travelMode: "TRANSIT",
     departureTime,
     computeAlternativeRoutes: true,
     fields: ["legs", "durationMillis", "localizedValues"]
-  };
+  });
 
-  const response = await state.Route.computeRoutes(request);
-  return (response.routes || []).map(parseRoute).filter(Boolean);
+  return (response.routes || [])
+    .map(route => parseTransitRoute(route, station, walkingMs))
+    .filter(Boolean);
 }
 
-function parseRoute(route) {
+function parseTransitRoute(route, station, walkingMs) {
   const steps = (route.legs || []).flatMap(leg => leg.steps || []);
-  const firstTransitIndex = steps.findIndex(step => step.transitDetails);
-  if (firstTransitIndex < 0) return null;
-
   const transitSteps = steps.filter(step => step.transitDetails);
-  if (!transitSteps.length) return null;
+
+  if (transitSteps.length === 0) return null;
 
   const first = transitSteps[0].transitDetails;
   const last = transitSteps[transitSteps.length - 1].transitDetails;
-  const departure = first.departureTime instanceof Date ? first.departureTime : new Date(first.departureTime);
-  const arrival = last.arrivalTime instanceof Date ? last.arrivalTime : new Date(last.arrivalTime);
 
-  if (!Number.isFinite(departure.getTime()) || !Number.isFinite(arrival.getTime())) return null;
+  const departure = toDate(first.departureTime);
+  const arrival = toDate(last.arrivalTime);
 
-  const walkingMs = steps.slice(0, firstTransitIndex).reduce(
-    (sum, step) => sum + (Number(step.staticDurationMillis) || 0), 0
-  );
+  if (!departure || !arrival) return null;
+
   const leaveBy = new Date(departure.getTime() - walkingMs);
   const homeArrival = new Date(arrival.getTime() + 10 * 60 * 1000);
 
   const segments = transitSteps.map(step => {
-    const td = step.transitDetails;
-    const line = td.transitLine || {};
+    const details = step.transitDetails;
+    const line = details.transitLine || {};
+
     return {
-      from: td.departureStop?.name || "乗車駅不明",
-      to: td.arrivalStop?.name || "降車駅不明",
-      departure: td.departureTime,
-      arrival: td.arrivalTime,
+      from: details.departureStop?.name || station.name,
+      to: details.arrivalStop?.name || "降車駅不明",
+      departure: toDate(details.departureTime),
+      arrival: toDate(details.arrivalTime),
       line: line.shortName || line.name || "路線名不明",
-      headsign: td.headsign || ""
+      headsign: details.headsign || ""
     };
   });
 
   return {
     mode: "TRANSIT",
-    station: first.departureStop?.name || "不明",
+    station,
     walkingMs,
     departure,
     arrival,
     leaveBy,
     homeArrival,
-    segments,
-    arrivalSort: arrival.getTime()
+    segments
   };
 }
 
-function selectRoute(routes, minimumSeconds) {
-  const now = Date.now();
+function selectBestTransitRoute(routes) {
   return routes
-    .filter(route => (route.leaveBy.getTime() - now) / 1000 > minimumSeconds)
-    .sort((a, b) => a.arrivalSort - b.arrivalSort)[0] || null;
+    .filter(route => route.departure && route.arrival && route.leaveBy)
+    .sort((a, b) => {
+      const arrivalDifference = a.arrival.getTime() - b.arrival.getTime();
+      if (arrivalDifference !== 0) return arrivalDifference;
+      return a.departure.getTime() - b.departure.getTime();
+    })[0] || null;
+}
+
+function isKomaeStation(name) {
+  return String(name).replace(/\s/g, "").includes("狛江駅");
+}
+
+function toDate(value) {
+  if (!value) return null;
+
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
 }
 
 function renderPosition(position) {
-  const { accuracy } = position.coords;
   els.location.textContent = "地名を確認中…";
-  els.accuracy.textContent = `測位精度：約${Math.round(accuracy)}m`;
+  els.accuracy.textContent =
+    `測位精度：約${Math.round(position.coords.accuracy)}m`;
 }
 
 function renderPlaceNameWithTimeout(position) {
@@ -555,36 +791,42 @@ async function renderPlaceName(position) {
     return;
   }
 
-  const location = {
-    lat: position.coords.latitude,
-    lng: position.coords.longitude
-  };
-
   const response = await state.geocoder.geocode({
-    location,
+    location: {
+      lat: position.coords.latitude,
+      lng: position.coords.longitude
+    },
     language: "ja",
     region: "JP"
   });
 
   const results = response.results || [];
-  if (!results.length) {
+
+  if (results.length === 0) {
     els.location.textContent = "地名を取得できません";
     return;
   }
 
   const placeName = buildJapanesePlaceName(results);
+
   els.location.textContent =
-    placeName || results[0].formatted_address || "地名を取得できません";
+    placeName ||
+    results[0].formatted_address ||
+    results[0].formattedAddress ||
+    "地名を取得できません";
 }
 
 function buildJapanesePlaceName(results) {
-  const components = results.flatMap(result => result.addressComponents || []);
+  const components = results.flatMap(result =>
+    result.address_components || result.addressComponents || []
+  );
 
   const getLongName = (...types) => {
     const component = components.find(item =>
       types.some(type => item.types?.includes(type))
     );
-    return component?.longText || component?.long_name || "";
+
+    return component?.long_name || component?.longText || "";
   };
 
   const prefecture = getLongName("administrative_area_level_1");
@@ -597,11 +839,12 @@ function buildJapanesePlaceName(results) {
   const town = getLongName(
     "sublocality_level_2",
     "sublocality_level_3",
-    "neighborhood",
-    "premise"
+    "sublocality_level_4",
+    "neighborhood"
   );
 
   const parts = [];
+
   for (const part of [prefecture, municipality, ward, town]) {
     if (part && !parts.includes(part)) parts.push(part);
   }
@@ -610,17 +853,20 @@ function buildJapanesePlaceName(results) {
 }
 
 function renderResult(result) {
-  if (result.mode === "WALKING") {
-    els.station.textContent = "狛江駅";
-    els.walk.textContent = `徒歩所要時間：約${formatDuration(result.walkingMs)}`;
-    els.train.textContent = "徒歩移動を推奨";
-    els.leaveBy.textContent = "鉄道を使う経路はありません";
-    els.komae.textContent = `狛江駅到着：約${formatTime(result.arrival)}`;
-    els.home.textContent = `${formatTime(result.homeArrival)} ごろ`;
+  if (result.mode === "WALK_TO_DESTINATION") {
+    els.station.textContent = result.station.name;
+    els.walk.textContent =
+      `徒歩所要時間：約${formatDuration(result.walkingMs)}`;
+    els.train.textContent = "目的地が最寄り駅";
+    els.leaveBy.textContent = "電車への乗車は不要です";
+    els.komae.textContent =
+      `狛江駅到着：約${formatTime(result.arrival)}`;
+    els.home.textContent =
+      `${formatTime(result.homeArrival)} ごろ`;
 
     const items = [
       {
-        main: "現在地から狛江駅まで徒歩",
+        main: `現在地から${DESTINATION_NAME}まで徒歩`,
         sub: `所要時間 約${formatDuration(result.walkingMs)}`
       },
       {
@@ -633,21 +879,32 @@ function renderResult(result) {
     return;
   }
 
-  els.station.textContent = result.station;
-  els.walk.textContent = `徒歩所要時間：${formatDuration(result.walkingMs)}`;
-  els.train.textContent = `${formatTime(result.departure)} 発`;
-  els.leaveBy.textContent = `現在地の出発期限：${formatTime(result.leaveBy)}`;
-  els.komae.textContent = `狛江駅到着：${formatTime(result.arrival)}`;
-  els.home.textContent = `${formatTime(result.homeArrival)} ごろ`;
+  els.station.textContent = result.station.name;
+  els.walk.textContent =
+    `徒歩所要時間：${formatDuration(result.walkingMs)}`;
+  els.train.textContent =
+    `${formatTime(result.departure)} 発`;
+  els.leaveBy.textContent =
+    `現在地の出発期限：${formatTime(result.leaveBy)}`;
+  els.komae.textContent =
+    `狛江駅到着：${formatTime(result.arrival)}`;
+  els.home.textContent =
+    `${formatTime(result.homeArrival)} ごろ`;
 
   const items = [
     {
-      main: `徒歩で${result.station}へ`,
-      sub: `所要時間 ${formatDuration(result.walkingMs)}`
+      main: `徒歩で${result.station.name}へ`,
+      sub:
+        `所要時間 ${formatDuration(result.walkingMs)}・` +
+        `直線距離 約${Math.round(result.station.distanceMeters)}m`
     },
-    ...result.segments.map(s => ({
-      main: `${s.from} → ${s.to}`,
-      sub: `${s.line}${s.headsign ? "・" + s.headsign + "方面" : ""}　${formatTime(s.departure)}発 → ${formatTime(s.arrival)}着`
+    ...result.segments.map(segment => ({
+      main: `${segment.from} → ${segment.to}`,
+      sub:
+        `${segment.line}` +
+        `${segment.headsign ? `・${segment.headsign}方面` : ""}　` +
+        `${formatTime(segment.departure)}発 → ` +
+        `${formatTime(segment.arrival)}着`
     })),
     {
       main: "狛江駅から自宅へ",
@@ -661,22 +918,26 @@ function renderResult(result) {
 function createRouteItem(item) {
   const li = document.createElement("li");
   li.className = "route-item";
+
   const main = document.createElement("div");
   main.className = "route-main";
   main.textContent = item.main;
+
   const sub = document.createElement("div");
   sub.className = "route-sub";
   sub.textContent = item.sub;
+
   li.append(main, sub);
   return li;
 }
 
 function updateCountdown() {
   els.countdown.className = "countdown";
-  if (state.result?.mode === "WALKING") {
+
+  if (state.result?.mode === "WALK_TO_DESTINATION") {
     els.countdown.textContent = "徒歩推奨";
     els.countdown.classList.add("green");
-    els.hint.textContent = "狛江駅まで鉄道を使う経路はありません";
+    els.hint.textContent = "目的地の狛江駅が最寄り駅です";
     return;
   }
 
@@ -686,16 +947,25 @@ function updateCountdown() {
     return;
   }
 
-  const seconds = Math.max(0, Math.floor((state.result.leaveBy.getTime() - Date.now()) / 1000));
-  els.countdown.textContent = formatCountdown(seconds);
+  const remainingSeconds = Math.max(
+    0,
+    Math.floor((state.result.leaveBy.getTime() - Date.now()) / 1000)
+  );
 
-  if (seconds <= 180) {
+  els.countdown.textContent = formatCountdown(remainingSeconds);
+
+  if (remainingSeconds <= MINIMUM_LEAVE_SECONDS) {
     els.countdown.classList.add("red");
-    els.hint.textContent = "次に間に合う経路へ更新します";
-    if (!state.refreshingNext && Date.now() - state.lastNextRefresh > 30000 && state.position) {
+    els.hint.textContent = "次に間に合う電車へ更新します";
+
+    if (
+      !state.refreshingNext &&
+      Date.now() - state.lastNextRefresh > 30000 &&
+      state.position
+    ) {
       refreshNextRoute();
     }
-  } else if (seconds <= 600) {
+  } else if (remainingSeconds <= 600) {
     els.countdown.classList.add("yellow");
     els.hint.textContent = "そろそろ出発準備";
   } else {
@@ -707,12 +977,23 @@ function updateCountdown() {
 async function refreshNextRoute() {
   state.refreshingNext = true;
   state.lastNextRefresh = Date.now();
-  setStatus("残り3分以下のため、次に間に合う電車へ更新しています…", "warning");
+
+  setStatus(
+    "残り3分以下のため、次に間に合う電車へ更新しています…",
+    "warning"
+  );
+
   try {
-    const result = await findUsableRoute(state.position, 180);
+    const result = await buildTripPlan(
+      state.position,
+      MINIMUM_LEAVE_SECONDS
+    );
+
     state.result = result;
     renderResult(result);
-    setStatus("次に間に合う経路へ更新しました。", "success");
+    updateCountdown();
+
+    setStatus("次に間に合う電車へ更新しました。", "success");
   } catch (error) {
     setStatus(humanizeError(error), "error");
   } finally {
@@ -720,27 +1001,37 @@ async function refreshNextRoute() {
   }
 }
 
-function formatCountdown(total) {
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  return [h, m, s].map(v => String(v).padStart(2, "0")).join(":");
+function formatCountdown(totalSeconds) {
+  const safe = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const seconds = safe % 60;
+
+  return [hours, minutes, seconds]
+    .map(value => String(value).padStart(2, "0"))
+    .join(":");
 }
 
 function formatTime(value) {
   const date = value instanceof Date ? value : new Date(value);
+
   if (!Number.isFinite(date.getTime())) return "—";
+
   return new Intl.DateTimeFormat("ja-JP", {
-    hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Tokyo"
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Asia/Tokyo"
   }).format(date);
 }
 
-function formatDuration(ms) {
-  const sec = Math.max(0, Math.round(ms / 1000));
-  const min = Math.floor(sec / 60);
-  const rem = sec % 60;
-  if (!min) return `${rem}秒`;
-  return rem ? `${min}分${rem}秒` : `${min}分`;
+function formatDuration(milliseconds) {
+  const totalSeconds = Math.max(0, Math.round(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes === 0) return `${seconds}秒`;
+  return seconds > 0 ? `${minutes}分${seconds}秒` : `${minutes}分`;
 }
 
 function setStatus(message, type) {
@@ -749,23 +1040,45 @@ function setStatus(message, type) {
 }
 
 function geoError(error) {
-  if (error.code === 1) return new Error("位置情報が許可されていません。iPhoneの設定でSafariの位置情報を許可してください。");
-  if (error.code === 2) return new Error("現在地を特定できません。屋外または窓際で再試行してください。");
-  if (error.code === 3) return new Error("位置情報の取得がタイムアウトしました。");
+  if (error.code === 1) {
+    return new Error(
+      "位置情報が許可されていません。iPhoneの設定でSafariの位置情報を許可してください。"
+    );
+  }
+
+  if (error.code === 2) {
+    return new Error(
+      "現在地を特定できません。屋外または窓際で再試行してください。"
+    );
+  }
+
+  if (error.code === 3) {
+    return new Error("位置情報の取得がタイムアウトしました。");
+  }
+
   return new Error("位置情報の取得に失敗しました。");
 }
 
 function humanizeError(error) {
   const message = error?.message || String(error);
+
   if (/RefererNotAllowed|referer/i.test(message)) {
-    return "APIキーのウェブサイト制限に、このGitHub PagesのURLが登録されていません。";
+    return "APIキーのウェブサイト制限に、このGitHub Pagesの正しいURLが登録されていません。";
   }
-  if (/ApiNotActivated|not activated/i.test(message)) {
-    return "Google CloudでMaps JavaScript API、Routes API、Geocoding APIのいずれかが有効になっていません。";
+
+  if (/Places API|searchNearby|places/i.test(message) &&
+      /not activated|disabled|denied|permission/i.test(message)) {
+    return "Google CloudでPlaces API（New）を有効にし、APIキーのAPI制限にも追加してください。";
   }
+
+  if (/ApiNotActivated|not activated|disabled/i.test(message)) {
+    return "Google CloudでMaps JavaScript API、Routes API、Geocoding API、Places API（New）の有効化を確認してください。";
+  }
+
   if (/BillingNotEnabled|billing/i.test(message)) {
     return "Google Cloudプロジェクトの請求先設定を確認してください。";
   }
+
   return message;
 }
 </script>
