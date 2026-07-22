@@ -1,0 +1,1383 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#eef6ff">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Komae Bound">
+  <title>Smart Transit Countdown — Komae Bound</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #eef6ff;
+      --surface: rgba(255,255,255,.88);
+      --text: #10233e;
+      --muted: #66778e;
+      --blue: #0969da;
+      --green: #168a4b;
+      --yellow: #b77900;
+      --red: #c9362b;
+      --border: rgba(16,35,62,.10);
+      --shadow: 0 14px 36px rgba(27,69,118,.12);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 15% 0%, rgba(62,148,255,.22), transparent 30rem),
+        linear-gradient(180deg, #eef6ff, #f9fbff 50%, #deedff);
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    .app {
+      width: min(100%, 720px);
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: max(18px, env(safe-area-inset-top)) 18px max(30px, env(safe-area-inset-bottom));
+    }
+    .topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; }
+    .eyebrow { margin: 0 0 3px; color: var(--blue); font-size: .7rem; font-weight: 800; letter-spacing: .13em; }
+    h1 { margin: 0; font-size: 1.7rem; letter-spacing: -.03em; }
+    .settings {
+      width: 48px; height: 48px; border: 1px solid var(--border); border-radius: 16px;
+      background: var(--surface); box-shadow: 0 8px 20px rgba(27,69,118,.08); font-size: 1.2rem;
+    }
+    .hero {
+      padding: 28px 18px 24px; border: 1px solid rgba(255,255,255,.9); border-radius: 28px;
+      background: linear-gradient(150deg, rgba(255,255,255,.96), rgba(234,244,255,.88));
+      box-shadow: var(--shadow); text-align: center;
+    }
+    .label { margin: 0 0 8px; color: var(--muted); font-size: .88rem; font-weight: 700; }
+    .countdown {
+      display: block; font-size: clamp(3rem, 14vw, 5.3rem); font-variant-numeric: tabular-nums;
+      font-weight: 850; line-height: 1; letter-spacing: -.055em;
+    }
+    .idle { color: #8291a5; } .green { color: var(--green); }
+    .yellow { color: var(--yellow); } .red { color: var(--red); }
+    .hint { min-height: 1.3em; margin: 12px 0 0; color: var(--muted); font-size: .86rem; }
+    .primary {
+      width: 100%; min-height: 52px; margin: 14px 0 12px; border: 0; border-radius: 16px;
+      color: #fff; background: linear-gradient(135deg, var(--blue), #2587f2);
+      box-shadow: 0 12px 24px rgba(9,105,218,.22); font-weight: 800;
+    }
+    .primary:disabled { opacity: .6; cursor: wait; }
+    .status { margin-bottom: 13px; padding: 12px 14px; border-radius: 14px; font-size: .84rem; line-height: 1.45; }
+    .info { color: #174d87; background: rgba(211,233,255,.88); }
+    .success { color: #126239; background: rgba(213,244,226,.9); }
+    .warning { color: #775000; background: rgba(255,237,192,.94); }
+    .error { color: #94281f; background: rgba(255,220,216,.94); }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+    .card, .route {
+      border: 1px solid rgba(255,255,255,.9); border-radius: 20px; background: var(--surface);
+      box-shadow: 0 10px 28px rgba(27,69,118,.09);
+    }
+    .card { display: flex; gap: 13px; padding: 17px; }
+    .icon { display: grid; flex: 0 0 44px; place-items: center; width: 44px; height: 44px;
+      border-radius: 14px; background: #e5f1ff; font-size: 1.25rem; }
+    .card h2 { margin: 0 0 4px; color: var(--muted); font-size: .74rem; }
+    .card p { margin: 0 0 3px; font-size: 1rem; font-weight: 800; line-height: 1.35; }
+    .card small { color: var(--muted); font-size: .75rem; }
+    .route { margin-top: 14px; padding: 18px; }
+    .route h2 { margin: 0; font-size: 1.05rem; }
+    .route-list { display: grid; gap: 13px; margin: 17px 0 0; padding: 0; list-style: none; }
+    .route-item { position: relative; padding-left: 25px; }
+    .route-item::before { position: absolute; top: .28em; left: 3px; width: 10px; height: 10px;
+      border: 3px solid #d9ebff; border-radius: 50%; background: var(--blue); content: ""; }
+    .route-item:not(:last-child)::after { position: absolute; top: 18px; bottom: -17px; left: 9px;
+      width: 2px; background: #cfe3fa; content: ""; }
+    .route-main { font-size: .91rem; font-weight: 800; line-height: 1.45; }
+    .route-sub { margin-top: 2px; color: var(--muted); font-size: .77rem; line-height: 1.5; }
+    .empty { color: var(--muted); font-size: .86rem; }
+    .foot { margin: 15px 5px 0; color: var(--muted); font-size: .7rem; line-height: 1.5; text-align: center; }
+    dialog { width: min(calc(100% - 28px), 480px); padding: 0; border: 0; border-radius: 24px;
+      box-shadow: 0 24px 70px rgba(16,35,62,.3); }
+    dialog::backdrop { background: rgba(9,24,45,.46); }
+    .dialog { padding: 20px; background: #fff; }
+    .dialog-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+    .dialog h2 { margin: 0; font-size: 1.15rem; }
+    .close { width: 42px; height: 42px; border: 0; border-radius: 14px; background: #f0f4f8; font-size: 1.2rem; }
+    label { display: block; margin-bottom: 7px; font-size: .78rem; font-weight: 800; }
+    input { width: 100%; height: 52px; padding: 0 13px; border: 1px solid #cbd7e4; border-radius: 14px; }
+    .note { margin: 9px 0 16px; color: var(--muted); font-size: .74rem; line-height: 1.55; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; }
+    .smallbtn { min-height: 46px; padding: 0 18px; border-radius: 14px; font-weight: 800; }
+    .ghost { border: 1px solid var(--border); background: #f2f6fa; color: var(--text); }
+    .save { border: 0; background: var(--blue); color: white; }
+    @media (min-width: 560px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">SMART TRANSIT COUNTDOWN</p>
+        <h1>Komae Bound <span style="font-size:.55rem;color:#0969da">v9.0</span></h1>
+      </div>
+      <button id="settingsButton" class="settings" aria-label="APIキー設定">🔑</button>
+    </header>
+
+    <main>
+      <section class="hero">
+        <p class="label">現在地を出発するまで</p>
+        <output id="countdown" class="countdown idle">--:--:--</output>
+        <p id="hint" class="hint">APIキーを設定してください</p>
+      </section>
+
+      <button id="refreshButton" class="primary">⌖ 位置情報を更新して検索</button>
+      <div id="status" class="status info">v9.0を読み込みました。右上の鍵ボタンからAPIキーを設定してください。</div>
+
+      <section class="grid">
+        <article class="card"><div class="icon">📍</div><div><h2>現在地</h2><p id="location">未取得</p><small id="accuracy">測位精度：—</small></div></article>
+        <article class="card"><div class="icon">🚉</div><div><h2>最寄り駅</h2><p id="station">—</p><small id="walk">徒歩所要時間：—</small></div></article>
+        <article class="card"><div class="icon">🚆</div><div><h2>次の電車</h2><p id="train">—</p><small id="leaveBy">現在地の出発期限：—</small></div></article>
+        <article class="card"><div class="icon">🏠</div><div><h2>自宅到着予定</h2><p id="home">—</p><small id="komae">狛江駅到着：—</small></div></article>
+      </section>
+
+      <section class="route">
+        <h2>電車乗り継ぎ経路</h2>
+        <ol id="routeList" class="route-list"><li class="empty">経路情報はまだありません。</li></ol>
+      </section>
+
+      <p class="foot">発車時刻・運行状況はGoogleの提供データに依存します。重要な移動では小田急電鉄などの公式情報も確認してください。</p>
+    </main>
+  </div>
+
+  <dialog id="settingsDialog">
+    <div class="dialog">
+      <div class="dialog-head"><h2>Google APIキー設定</h2><button id="closeDialog" class="close">×</button></div>
+      <label for="apiKey">Maps JavaScript APIキー</label>
+      <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="AIza...">
+      <p class="note">この端末のSafari内だけに保存します。Google Cloud側でウェブサイト制限を設定し、Maps JavaScript API、Routes API、Geocoding API、Places API（New）、Directions API（Legacy）だけを許可してください。</p>
+      <div class="dialog-actions">
+        <button id="clearKey" class="smallbtn ghost">削除</button>
+        <button id="saveKey" class="smallbtn save">保存</button>
+      </div>
+    </div>
+  </dialog>
+
+<script>
+"use strict";
+
+const KEY_STORAGE = "komaeBoundMapsJsKey";
+const DESTINATION_NAME = "狛江駅";
+const DESTINATION_QUERY = "狛江駅, 東京都狛江市, 日本";
+const MINIMUM_LEAVE_SECONDS = 180;
+
+const els = {
+  settingsButton: document.getElementById("settingsButton"),
+  settingsDialog: document.getElementById("settingsDialog"),
+  closeDialog: document.getElementById("closeDialog"),
+  apiKey: document.getElementById("apiKey"),
+  saveKey: document.getElementById("saveKey"),
+  clearKey: document.getElementById("clearKey"),
+  refreshButton: document.getElementById("refreshButton"),
+  countdown: document.getElementById("countdown"),
+  hint: document.getElementById("hint"),
+  status: document.getElementById("status"),
+  location: document.getElementById("location"),
+  accuracy: document.getElementById("accuracy"),
+  station: document.getElementById("station"),
+  walk: document.getElementById("walk"),
+  train: document.getElementById("train"),
+  leaveBy: document.getElementById("leaveBy"),
+  home: document.getElementById("home"),
+  komae: document.getElementById("komae"),
+  routeList: document.getElementById("routeList")
+};
+
+const state = {
+  mapsLoaded: false,
+  mapsLoading: null,
+  Route: null,
+  Geocoder: null,
+  geocoder: null,
+  Place: null,
+  SearchNearbyRankPreference: null,
+  destinationPlace: null,
+  directionsService: null,
+  position: null,
+  result: null,
+  busy: false,
+  refreshingNext: false,
+  lastNextRefresh: 0
+};
+
+els.settingsButton.addEventListener("click", openSettings);
+els.closeDialog.addEventListener("click", () => els.settingsDialog.close());
+els.saveKey.addEventListener("click", saveApiKey);
+els.clearKey.addEventListener("click", clearApiKey);
+els.refreshButton.addEventListener("click", refreshAll);
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") updateCountdown();
+});
+
+window.setInterval(updateCountdown, 1000);
+
+window.addEventListener("load", () => {
+  els.apiKey.value = localStorage.getItem(KEY_STORAGE) || "";
+
+  if (!els.apiKey.value) {
+    window.setTimeout(openSettings, 250);
+  } else {
+    setStatus("位置情報を取得してください。", "info");
+    els.hint.textContent = "位置情報を更新してください";
+  }
+});
+
+function openSettings() {
+  els.apiKey.value = localStorage.getItem(KEY_STORAGE) || "";
+  els.settingsDialog.showModal();
+}
+
+function saveApiKey() {
+  const key = els.apiKey.value.trim();
+
+  if (!/^AIza[0-9A-Za-z_-]{20,}$/.test(key)) {
+    setStatus(
+      "APIキーの形式を確認してください。通常は「AIza」で始まります。",
+      "warning"
+    );
+    return;
+  }
+
+  localStorage.setItem(KEY_STORAGE, key);
+  els.settingsDialog.close();
+  setStatus("APIキーを保存しました。位置情報を更新してください。", "success");
+  els.hint.textContent = "位置情報を更新してください";
+}
+
+function clearApiKey() {
+  localStorage.removeItem(KEY_STORAGE);
+  els.apiKey.value = "";
+  setStatus("保存済みAPIキーを削除しました。", "info");
+}
+
+async function refreshAll() {
+  if (state.busy) return;
+
+  const key = localStorage.getItem(KEY_STORAGE) || "";
+
+  if (!key) {
+    openSettings();
+    setStatus("先にGoogle APIキーを設定してください。", "warning");
+    return;
+  }
+
+  state.busy = true;
+  els.refreshButton.disabled = true;
+  els.refreshButton.textContent = "測位・経路検索中…";
+
+  try {
+    setStatus("Google Maps機能を読み込んでいます…", "info");
+    await loadMaps(key);
+
+    setStatus("高精度の現在地を取得しています…", "info");
+    const position = await getAccuratePosition();
+    state.position = position;
+    renderPosition(position);
+
+    // 地名取得は経路検索と並行して行い、遅延しても本体を止めない。
+    renderPlaceNameWithTimeout(position);
+
+    setStatus("現在地周辺から最寄りの鉄道駅を検索しています…", "info");
+
+    const result = await buildTripPlan(position, MINIMUM_LEAVE_SECONDS);
+    state.result = result;
+
+    renderResult(result);
+    updateCountdown();
+
+    if (result.mode === "WALK_TO_DESTINATION") {
+      setStatus(
+        "目的地の狛江駅が最寄り駅のため、徒歩経路を表示しました。",
+        "success"
+      );
+    } else {
+      setStatus(
+        `最寄り駅は${result.station.name}です。次の利用可能な電車を取得しました。`,
+        "success"
+      );
+    }
+  } catch (error) {
+    console.error(error);
+    setStatus(humanizeError(error), "error");
+    els.hint.textContent = "取得に失敗しました";
+  } finally {
+    state.busy = false;
+    els.refreshButton.disabled = false;
+    els.refreshButton.textContent = "⌖ 位置情報を更新して検索";
+  }
+}
+
+function loadMaps(key) {
+  if (
+    state.mapsLoaded &&
+    state.Route &&
+    state.Place &&
+    state.SearchNearbyRankPreference &&
+    state.directionsService
+  ) {
+    return Promise.resolve();
+  }
+
+  if (state.mapsLoading) return state.mapsLoading;
+
+  state.mapsLoading = new Promise((resolve, reject) => {
+    const callbackName = "__komaeMapsReady";
+
+    window[callbackName] = async () => {
+      try {
+        const [
+          { Route },
+          { Geocoder },
+          { Place, SearchNearbyRankPreference }
+        ] = await Promise.all([
+          google.maps.importLibrary("routes"),
+          google.maps.importLibrary("geocoding"),
+          google.maps.importLibrary("places")
+        ]);
+
+        state.Route = Route;
+        state.Geocoder = Geocoder;
+        state.geocoder = new Geocoder();
+        state.Place = Place;
+        state.SearchNearbyRankPreference = SearchNearbyRankPreference;
+        state.directionsService = new google.maps.DirectionsService();
+        state.mapsLoaded = true;
+        resolve();
+      } catch (error) {
+        reject(error);
+      } finally {
+        delete window[callbackName];
+      }
+    };
+
+    const script = document.createElement("script");
+    script.async = true;
+    script.defer = true;
+    script.src =
+      "https://maps.googleapis.com/maps/api/js" +
+      "?key=" + encodeURIComponent(key) +
+      "&v=weekly&loading=async&language=ja&region=JP" +
+      "&callback=" + callbackName;
+
+    const loadTimeout = window.setTimeout(() => {
+      reject(
+        new Error(
+          "Google Maps機能の読み込みがタイムアウトしました。API設定を確認してください。"
+        )
+      );
+    }, 15000);
+
+    script.onerror = () => {
+      window.clearTimeout(loadTimeout);
+      reject(
+        new Error(
+          "Google Maps JavaScript APIを読み込めませんでした。APIキーと制限設定を確認してください。"
+        )
+      );
+    };
+
+    const originalCallback = window[callbackName];
+
+    window[callbackName] = async () => {
+      window.clearTimeout(loadTimeout);
+      await originalCallback();
+    };
+
+    document.head.appendChild(script);
+  }).finally(() => {
+    if (!state.mapsLoaded) state.mapsLoading = null;
+  });
+
+  return state.mapsLoading;
+}
+
+function getAccuratePosition() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error("このブラウザーは位置情報取得に対応していません。"));
+      return;
+    }
+
+    let best = null;
+    let finished = false;
+    let watchId = null;
+    let timeoutId = null;
+
+    const finish = (callback, value) => {
+      if (finished) return;
+      finished = true;
+
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+
+      callback(value);
+    };
+
+    watchId = navigator.geolocation.watchPosition(
+      position => {
+        if (!best || position.coords.accuracy < best.coords.accuracy) {
+          best = position;
+          renderPosition(position);
+        }
+
+        if (position.coords.accuracy <= 100) {
+          finish(resolve, position);
+        }
+      },
+      error => {
+        if (best) {
+          finish(resolve, best);
+        } else {
+          finish(reject, geoError(error));
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 30000
+      }
+    );
+
+    timeoutId = window.setTimeout(() => {
+      if (best) {
+        finish(resolve, best);
+      } else {
+        finish(
+          reject,
+          new Error(
+            "現在地を取得できませんでした。位置情報の許可と通信状態を確認してください。"
+          )
+        );
+      }
+    }, 16000);
+  });
+}
+
+async function buildTripPlan(position, minimumLeaveSeconds) {
+  const origin = {
+    lat: position.coords.latitude,
+    lng: position.coords.longitude
+  };
+
+  const [station, destinationPlace] = await Promise.all([
+    findNearestRailStation(origin),
+    getDestinationStationPlace()
+  ]);
+
+  const walking = await computeWalkingRoute(origin, station.location);
+
+  // 電車経路が失敗しても、取得済みの最寄り駅と徒歩時間は画面へ表示する。
+  renderPreliminaryStation(station, walking.durationMs);
+
+  if (
+    isKomaeStation(station.name) ||
+    (station.id && destinationPlace?.id && station.id === destinationPlace.id)
+  ) {
+    const arrival = new Date(Date.now() + walking.durationMs);
+
+    return {
+      mode: "WALK_TO_DESTINATION",
+      station,
+      walkingMs: walking.durationMs,
+      departure: null,
+      arrival,
+      leaveBy: null,
+      homeArrival: new Date(arrival.getTime() + 10 * 60 * 1000),
+      segments: []
+    };
+  }
+
+  const transitRoutes = await findTransitRoutes(
+    station,
+    destinationPlace,
+    walking.durationMs,
+    minimumLeaveSeconds
+  );
+
+  const selected = selectBestTransitRoute(transitRoutes);
+
+  if (!selected) {
+    throw new Error(
+      `V9_NO_TRANSIT_RESULT: 最寄り駅は${station.name}ですが、解析可能な公共交通経路がありません。`
+    );
+  }
+
+  return selected;
+}
+
+async function getDestinationStationPlace() {
+  if (state.destinationPlace) return state.destinationPlace;
+
+  const response = await state.Place.searchByText({
+    textQuery: "狛江駅 東京都狛江市",
+    fields: [
+      "id",
+      "displayName",
+      "location",
+      "formattedAddress",
+      "types",
+      "primaryType"
+    ],
+    includedType: "train_station",
+    useStrictTypeFiltering: false,
+    language: "ja",
+    region: "jp",
+    maxResultCount: 5
+  });
+
+  const places = response.places || [];
+
+  const exact =
+    places.find(place => {
+      const name =
+        typeof place.displayName === "string"
+          ? place.displayName
+          : place.displayName?.text || "";
+      return name.replace(/\s/g, "").includes("狛江駅");
+    }) || places[0];
+
+  if (!exact) {
+    throw new Error(
+      "目的地の狛江駅をGoogle Placesから取得できませんでした。"
+    );
+  }
+
+  state.destinationPlace = exact;
+  return exact;
+}
+
+function renderPreliminaryStation(station, walkingMs) {
+  els.station.textContent = station.name;
+  els.walk.textContent =
+    `徒歩所要時間：${formatDuration(walkingMs)}`;
+  els.train.textContent = "電車時刻を検索中…";
+  els.leaveBy.textContent = "現在地の出発期限：計算中";
+}
+
+async function findNearestRailStation(origin) {
+  const searchRadii = [3000, 10000, 30000];
+  const railPrimaryTypes = [
+    "train_station",
+    "subway_station",
+    "light_rail_station"
+  ];
+
+  for (const radius of searchRadii) {
+    const candidates = await searchNearbyStations(
+      origin,
+      radius,
+      railPrimaryTypes
+    );
+
+    if (candidates.length > 0) {
+      return candidates[0];
+    }
+  }
+
+  // 一部の駅が transit_station として登録されている場合の補完。
+  for (const radius of searchRadii) {
+    const candidates = await searchNearbyStations(
+      origin,
+      radius,
+      ["transit_station"]
+    );
+
+    const stationLike = candidates.filter(candidate =>
+      candidate.name.includes("駅")
+    );
+
+    if (stationLike.length > 0) {
+      return stationLike[0];
+    }
+  }
+
+  throw new Error(
+    "現在地周辺に鉄道駅を見つけられませんでした。Places API（New）の設定を確認してください。"
+  );
+}
+
+async function searchNearbyStations(origin, radius, primaryTypes) {
+  const request = {
+    fields: [
+      "id",
+      "displayName",
+      "location",
+      "formattedAddress",
+      "types",
+      "primaryType"
+    ],
+    locationRestriction: {
+      center: origin,
+      radius
+    },
+    includedPrimaryTypes: primaryTypes,
+    maxResultCount: 20,
+    rankPreference: state.SearchNearbyRankPreference.DISTANCE
+  };
+
+  const response = await state.Place.searchNearby(request);
+  const places = response.places || [];
+
+  return places
+    .map(place => placeToStation(place, origin))
+    .filter(Boolean)
+    .sort((a, b) => a.distanceMeters - b.distanceMeters);
+}
+
+function placeToStation(place, origin) {
+  const location = toLatLngLiteral(place.location);
+  if (!location) return null;
+
+  const displayName =
+    typeof place.displayName === "string"
+      ? place.displayName
+      : place.displayName?.text || "";
+
+  if (!displayName) return null;
+
+  return {
+    id: place.id || null,
+    place,
+    name: normalizeStationName(displayName),
+    location,
+    formattedAddress: place.formattedAddress || "",
+    types: Array.isArray(place.types) ? place.types : [],
+    primaryType: place.primaryType || "",
+    distanceMeters: haversineMeters(origin, location)
+  };
+}
+
+function normalizeStationName(name) {
+  const trimmed = String(name).trim();
+  return trimmed.endsWith("駅") ? trimmed : `${trimmed}駅`;
+}
+
+function toLatLngLiteral(location) {
+  if (!location) return null;
+
+  const lat =
+    typeof location.lat === "function" ? location.lat() : Number(location.lat);
+  const lng =
+    typeof location.lng === "function" ? location.lng() : Number(location.lng);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+  return { lat, lng };
+}
+
+function haversineMeters(a, b) {
+  const earthRadius = 6371000;
+  const toRadians = degrees => (degrees * Math.PI) / 180;
+
+  const lat1 = toRadians(a.lat);
+  const lat2 = toRadians(b.lat);
+  const deltaLat = toRadians(b.lat - a.lat);
+  const deltaLng = toRadians(b.lng - a.lng);
+
+  const value =
+    Math.sin(deltaLat / 2) ** 2 +
+    Math.cos(lat1) *
+      Math.cos(lat2) *
+      Math.sin(deltaLng / 2) ** 2;
+
+  return 2 * earthRadius * Math.asin(Math.sqrt(value));
+}
+
+async function computeWalkingRoute(origin, destination) {
+  const response = await state.Route.computeRoutes({
+    origin,
+    destination,
+    travelMode: "WALKING",
+    computeAlternativeRoutes: false,
+    fields: ["legs", "durationMillis", "distanceMeters", "localizedValues"]
+  });
+
+  const route = (response.routes || [])[0];
+
+  if (!route) {
+    throw new Error("現在地から最寄り駅までの徒歩経路を取得できませんでした。");
+  }
+
+  const durationMs =
+    Number(route.durationMillis) ||
+    (route.legs || []).reduce(
+      (sum, leg) => sum + (Number(leg.durationMillis) || 0),
+      0
+    );
+
+  if (!Number.isFinite(durationMs) || durationMs < 0) {
+    throw new Error("最寄り駅までの徒歩所要時間を計算できませんでした。");
+  }
+
+  return {
+    durationMs,
+    distanceMeters: Number(route.distanceMeters) || null
+  };
+}
+
+async function findTransitRoutes(
+  station,
+  destinationPlace,
+  walkingMs,
+  minimumLeaveSeconds
+) {
+  const earliestStationArrival = new Date(
+    Date.now() + walkingMs + minimumLeaveSeconds * 1000
+  );
+
+  const departureCandidates = [
+    earliestStationArrival,
+    new Date(earliestStationArrival.getTime() + 10 * 60 * 1000),
+    new Date(earliestStationArrival.getTime() + 20 * 60 * 1000)
+  ];
+
+  const originCandidates = [
+    station.id ? { placeId: station.id } : null,
+    `${station.name}, 東京都, 日本`,
+    station.location
+  ].filter(Boolean);
+
+  const destinationCandidates = [
+    destinationPlace?.id ? { placeId: destinationPlace.id } : null,
+    "狛江駅, 東京都狛江市, 日本"
+  ].filter(Boolean);
+
+  const statuses = [];
+  let receivedOkResponse = false;
+  let receivedRouteObjects = false;
+
+  for (const departureTime of departureCandidates) {
+    for (const origin of originCandidates) {
+      for (const destination of destinationCandidates) {
+        const result = await requestLegacyTransitDirections({
+          origin,
+          destination,
+          departureTime
+        });
+
+        statuses.push(result.status);
+
+        if (result.status === "OK") {
+          receivedOkResponse = true;
+        }
+
+        if (result.response?.routes?.length) {
+          receivedRouteObjects = true;
+        }
+
+        if (result.status === "OK" && result.response?.routes?.length) {
+          const parsed = result.response.routes
+            .map(route =>
+              parseLegacyTransitRoute(
+                route,
+                station,
+                walkingMs,
+                result.response
+              )
+            )
+            .filter(Boolean);
+
+          if (parsed.length > 0) {
+            return parsed;
+          }
+        }
+      }
+    }
+  }
+
+  const uniqueStatuses = [...new Set(statuses.filter(Boolean))];
+
+  if (uniqueStatuses.includes("REQUEST_DENIED")) {
+    throw new Error(
+      "DIRECTIONS_STATUS: REQUEST_DENIED。Directions API（Legacy）は有効でも、使用中のAPIキーの「APIの制限」にDirections API（Legacy）が追加されていない、または別プロジェクトのAPIキーを使っている可能性があります。"
+    );
+  }
+
+  if (uniqueStatuses.includes("OVER_QUERY_LIMIT")) {
+    throw new Error(
+      "DIRECTIONS_STATUS: OVER_QUERY_LIMIT。Directions APIの割り当て上限または短時間のリクエスト上限に達しています。"
+    );
+  }
+
+  if (uniqueStatuses.includes("UNKNOWN_ERROR")) {
+    throw new Error(
+      "DIRECTIONS_STATUS: UNKNOWN_ERROR。Google側で経路検索を処理できませんでした。時間を置いて再実行してください。"
+    );
+  }
+
+  if (receivedOkResponse && receivedRouteObjects) {
+    throw new Error(
+      "DIRECTIONS_STATUS: OK。ただし返された公共交通データを解析できませんでした。"
+    );
+  }
+
+  if (uniqueStatuses.includes("ZERO_RESULTS")) {
+    throw new Error(
+      "DIRECTIONS_STATUS: ZERO_RESULTS。Googleは水道橋駅から狛江駅までの公共交通経路を返しませんでした。"
+    );
+  }
+
+  throw new Error(
+    `DIRECTIONS_STATUS: ${uniqueStatuses.join(", ") || "NO_STATUS"}。公共交通経路を取得できませんでした。`
+  );
+}
+
+function requestLegacyTransitDirections({
+  origin,
+  destination,
+  departureTime
+}) {
+  return new Promise(resolve => {
+    const transitOptions = {
+      departureTime
+    };
+
+    if (google.maps.TransitRoutePreference?.FEWER_TRANSFERS) {
+      transitOptions.routingPreference =
+        google.maps.TransitRoutePreference.FEWER_TRANSFERS;
+    }
+
+    state.directionsService.route(
+      {
+        origin,
+        destination,
+        travelMode: google.maps.TravelMode.TRANSIT,
+        transitOptions,
+        provideRouteAlternatives: true,
+        region: "jp",
+        language: "ja"
+      },
+      (response, status) => {
+        resolve({
+          response,
+          status: String(status || "NO_STATUS")
+        });
+      }
+    );
+  });
+}
+
+function getTransitDetails(step) {
+  return (
+    step?.transit ||
+    step?.transit_details ||
+    step?.transitDetails ||
+    null
+  );
+}
+
+function getTimeDate(timeObject) {
+  if (!timeObject) return null;
+
+  const value =
+    timeObject.value ??
+    timeObject.time ??
+    timeObject.date ??
+    timeObject;
+
+  return toDate(value);
+}
+
+function getStopName(stop, fallback) {
+  return (
+    stop?.name ||
+    stop?.displayName?.text ||
+    stop?.displayName ||
+    fallback
+  );
+}
+
+function parseLegacyTransitRoute(
+  route,
+  station,
+  walkingMs,
+  directionsResponse
+) {
+  const legs = route.legs || [];
+  const steps = legs.flatMap(leg => leg.steps || []);
+
+  const transitSteps = steps
+    .map(step => ({
+      step,
+      details: getTransitDetails(step)
+    }))
+    .filter(item => item.details);
+
+  if (transitSteps.length === 0) return null;
+
+  const firstTransit = transitSteps[0].details;
+  const lastTransit = transitSteps[transitSteps.length - 1].details;
+
+  const departure =
+    getTimeDate(firstTransit.departure_time) ||
+    getTimeDate(firstTransit.departureTime) ||
+    getTimeDate(legs[0]?.departure_time) ||
+    getTimeDate(legs[0]?.departureTime);
+
+  const arrival =
+    getTimeDate(lastTransit.arrival_time) ||
+    getTimeDate(lastTransit.arrivalTime) ||
+    getTimeDate(legs[legs.length - 1]?.arrival_time) ||
+    getTimeDate(legs[legs.length - 1]?.arrivalTime);
+
+  if (!departure || !arrival) return null;
+
+  const leaveBy = new Date(departure.getTime() - walkingMs);
+  const homeArrival = new Date(arrival.getTime() + 10 * 60 * 1000);
+
+  const agencies = new Map();
+
+  const segments = transitSteps.map(({ details }) => {
+    const line = details.line || details.transitLine || {};
+    const lineAgencies = line.agencies || [];
+
+    for (const agency of lineAgencies) {
+      const agencyName =
+        agency?.name ||
+        agency?.displayName?.text ||
+        agency?.displayName;
+
+      if (agencyName) {
+        agencies.set(agencyName, {
+          name: agencyName,
+          url: agency.url || null
+        });
+      }
+    }
+
+    const departureStop =
+      details.departure_stop || details.departureStop;
+    const arrivalStop =
+      details.arrival_stop || details.arrivalStop;
+
+    return {
+      from: getStopName(departureStop, station.name),
+      to: getStopName(arrivalStop, "降車駅不明"),
+      departure:
+        getTimeDate(details.departure_time) ||
+        getTimeDate(details.departureTime),
+      arrival:
+        getTimeDate(details.arrival_time) ||
+        getTimeDate(details.arrivalTime),
+      line:
+        line.short_name ||
+        line.shortName ||
+        line.name ||
+        line.displayName?.text ||
+        "路線名不明",
+      headsign: details.headsign || ""
+    };
+  });
+
+  return {
+    mode: "TRANSIT",
+    station,
+    walkingMs,
+    departure,
+    arrival,
+    leaveBy,
+    homeArrival,
+    segments,
+    agencies: Array.from(agencies.values()),
+    warnings: Array.isArray(route.warnings) ? route.warnings : [],
+    copyrights:
+      route.copyrights ||
+      directionsResponse?.routes?.[0]?.copyrights ||
+      ""
+  };
+}
+
+function selectBestTransitRoute(routes) {
+  return routes
+    .filter(route => route.departure && route.arrival && route.leaveBy)
+    .sort((a, b) => {
+      const arrivalDifference = a.arrival.getTime() - b.arrival.getTime();
+      if (arrivalDifference !== 0) return arrivalDifference;
+      return a.departure.getTime() - b.departure.getTime();
+    })[0] || null;
+}
+
+function isKomaeStation(name) {
+  return String(name).replace(/\s/g, "").includes("狛江駅");
+}
+
+function toDate(value) {
+  if (!value) return null;
+
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function renderPosition(position) {
+  els.location.textContent = "地名を確認中…";
+  els.accuracy.textContent =
+    `測位精度：約${Math.round(position.coords.accuracy)}m`;
+}
+
+function renderPlaceNameWithTimeout(position) {
+  const timeoutId = window.setTimeout(() => {
+    if (els.location.textContent === "地名を確認中…") {
+      els.location.textContent = "地名を取得できません";
+    }
+  }, 6000);
+
+  renderPlaceName(position)
+    .catch(error => {
+      console.warn("Reverse geocoding failed:", error);
+      els.location.textContent = "地名を取得できません";
+    })
+    .finally(() => window.clearTimeout(timeoutId));
+}
+
+async function renderPlaceName(position) {
+  if (!state.geocoder) {
+    els.location.textContent = "現在地を取得済み";
+    return;
+  }
+
+  const response = await state.geocoder.geocode({
+    location: {
+      lat: position.coords.latitude,
+      lng: position.coords.longitude
+    },
+    language: "ja",
+    region: "JP"
+  });
+
+  const results = response.results || [];
+
+  if (results.length === 0) {
+    els.location.textContent = "地名を取得できません";
+    return;
+  }
+
+  const placeName = buildJapanesePlaceName(results);
+
+  els.location.textContent =
+    placeName ||
+    results[0].formatted_address ||
+    results[0].formattedAddress ||
+    "地名を取得できません";
+}
+
+function buildJapanesePlaceName(results) {
+  const components = results.flatMap(result =>
+    result.address_components || result.addressComponents || []
+  );
+
+  const getLongName = (...types) => {
+    const component = components.find(item =>
+      types.some(type => item.types?.includes(type))
+    );
+
+    return component?.long_name || component?.longText || "";
+  };
+
+  const prefecture = getLongName("administrative_area_level_1");
+  const municipality = getLongName(
+    "locality",
+    "administrative_area_level_2",
+    "administrative_area_level_3"
+  );
+  const ward = getLongName("sublocality_level_1", "ward");
+  const town = getLongName(
+    "sublocality_level_2",
+    "sublocality_level_3",
+    "sublocality_level_4",
+    "neighborhood"
+  );
+
+  const parts = [];
+
+  for (const part of [prefecture, municipality, ward, town]) {
+    if (part && !parts.includes(part)) parts.push(part);
+  }
+
+  return parts.join("");
+}
+
+function renderResult(result) {
+  if (result.mode === "WALK_TO_DESTINATION") {
+    els.station.textContent = result.station.name;
+    els.walk.textContent =
+      `徒歩所要時間：約${formatDuration(result.walkingMs)}`;
+    els.train.textContent = "目的地が最寄り駅";
+    els.leaveBy.textContent = "電車への乗車は不要です";
+    els.komae.textContent =
+      `狛江駅到着：約${formatTime(result.arrival)}`;
+    els.home.textContent =
+      `${formatTime(result.homeArrival)} ごろ`;
+
+    const items = [
+      {
+        main: `現在地から${DESTINATION_NAME}まで徒歩`,
+        sub: `所要時間 約${formatDuration(result.walkingMs)}`
+      },
+      {
+        main: "狛江駅から自宅へ",
+        sub: "所要時間を10分として計算"
+      }
+    ];
+
+    els.routeList.replaceChildren(...items.map(createRouteItem));
+    return;
+  }
+
+  els.station.textContent = result.station.name;
+  els.walk.textContent =
+    `徒歩所要時間：${formatDuration(result.walkingMs)}`;
+  els.train.textContent =
+    `${formatTime(result.departure)} 発`;
+  els.leaveBy.textContent =
+    `現在地の出発期限：${formatTime(result.leaveBy)}`;
+  els.komae.textContent =
+    `狛江駅到着：${formatTime(result.arrival)}`;
+  els.home.textContent =
+    `${formatTime(result.homeArrival)} ごろ`;
+
+  const items = [
+    {
+      main: `徒歩で${result.station.name}へ`,
+      sub:
+        `所要時間 ${formatDuration(result.walkingMs)}・` +
+        `直線距離 約${Math.round(result.station.distanceMeters)}m`
+    },
+    ...result.segments.map(segment => ({
+      main: `${segment.from} → ${segment.to}`,
+      sub:
+        `${segment.line}` +
+        `${segment.headsign ? `・${segment.headsign}方面` : ""}　` +
+        `${formatTime(segment.departure)}発 → ` +
+        `${formatTime(segment.arrival)}着`
+    })),
+    {
+      main: "狛江駅から自宅へ",
+      sub: "所要時間を10分として計算"
+    }
+  ];
+
+  if (result.agencies?.length) {
+    items.push({
+      main: "運行事業者",
+      sub: result.agencies.map(agency => agency.name).join("・")
+    });
+  }
+
+  if (result.warnings?.length) {
+    items.push({
+      main: "経路に関する注意",
+      sub: result.warnings.join(" ")
+    });
+  }
+
+  if (result.copyrights) {
+    items.push({
+      main: "地図・経路データ",
+      sub: result.copyrights
+    });
+  }
+
+  els.routeList.replaceChildren(...items.map(createRouteItem));
+}
+
+function createRouteItem(item) {
+  const li = document.createElement("li");
+  li.className = "route-item";
+
+  const main = document.createElement("div");
+  main.className = "route-main";
+  main.textContent = item.main;
+
+  const sub = document.createElement("div");
+  sub.className = "route-sub";
+  sub.textContent = item.sub;
+
+  li.append(main, sub);
+  return li;
+}
+
+function updateCountdown() {
+  els.countdown.className = "countdown";
+
+  if (state.result?.mode === "WALK_TO_DESTINATION") {
+    els.countdown.textContent = "徒歩推奨";
+    els.countdown.classList.add("green");
+    els.hint.textContent = "目的地の狛江駅が最寄り駅です";
+    return;
+  }
+
+  if (!state.result?.leaveBy) {
+    els.countdown.textContent = "--:--:--";
+    els.countdown.classList.add("idle");
+    return;
+  }
+
+  const remainingSeconds = Math.max(
+    0,
+    Math.floor((state.result.leaveBy.getTime() - Date.now()) / 1000)
+  );
+
+  els.countdown.textContent = formatCountdown(remainingSeconds);
+
+  if (remainingSeconds <= MINIMUM_LEAVE_SECONDS) {
+    els.countdown.classList.add("red");
+    els.hint.textContent = "次に間に合う電車へ更新します";
+
+    if (
+      !state.refreshingNext &&
+      Date.now() - state.lastNextRefresh > 30000 &&
+      state.position
+    ) {
+      refreshNextRoute();
+    }
+  } else if (remainingSeconds <= 600) {
+    els.countdown.classList.add("yellow");
+    els.hint.textContent = "そろそろ出発準備";
+  } else {
+    els.countdown.classList.add("green");
+    els.hint.textContent = "現在地を出るまでの残り時間";
+  }
+}
+
+async function refreshNextRoute() {
+  state.refreshingNext = true;
+  state.lastNextRefresh = Date.now();
+
+  setStatus(
+    "残り3分以下のため、次に間に合う電車へ更新しています…",
+    "warning"
+  );
+
+  try {
+    const result = await buildTripPlan(
+      state.position,
+      MINIMUM_LEAVE_SECONDS
+    );
+
+    state.result = result;
+    renderResult(result);
+    updateCountdown();
+
+    setStatus("次に間に合う電車へ更新しました。", "success");
+  } catch (error) {
+    setStatus(humanizeError(error), "error");
+  } finally {
+    state.refreshingNext = false;
+  }
+}
+
+function formatCountdown(totalSeconds) {
+  const safe = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const seconds = safe % 60;
+
+  return [hours, minutes, seconds]
+    .map(value => String(value).padStart(2, "0"))
+    .join(":");
+}
+
+function formatTime(value) {
+  const date = value instanceof Date ? value : new Date(value);
+
+  if (!Number.isFinite(date.getTime())) return "—";
+
+  return new Intl.DateTimeFormat("ja-JP", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Asia/Tokyo"
+  }).format(date);
+}
+
+function formatDuration(milliseconds) {
+  const totalSeconds = Math.max(0, Math.round(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  if (minutes === 0) return `${seconds}秒`;
+  return seconds > 0 ? `${minutes}分${seconds}秒` : `${minutes}分`;
+}
+
+function setStatus(message, type) {
+  els.status.textContent = message;
+  els.status.className = `status ${type}`;
+}
+
+function geoError(error) {
+  if (error.code === 1) {
+    return new Error(
+      "位置情報が許可されていません。iPhoneの設定でSafariの位置情報を許可してください。"
+    );
+  }
+
+  if (error.code === 2) {
+    return new Error(
+      "現在地を特定できません。屋外または窓際で再試行してください。"
+    );
+  }
+
+  if (error.code === 3) {
+    return new Error("位置情報の取得がタイムアウトしました。");
+  }
+
+  return new Error("位置情報の取得に失敗しました。");
+}
+
+function humanizeError(error) {
+  const message = error?.message || String(error);
+
+  if (/RefererNotAllowed|referer/i.test(message)) {
+    return "APIキーのウェブサイト制限に、このGitHub Pagesの正しいURLが登録されていません。";
+  }
+
+  if (/Places API|searchNearby|places/i.test(message) &&
+      /not activated|disabled|denied|permission/i.test(message)) {
+    return "Google CloudでPlaces API（New）を有効にし、APIキーのAPI制限にも追加してください。";
+  }
+
+  if (/ApiNotActivated|not activated|disabled/i.test(message)) {
+    return "Google CloudでMaps JavaScript API、Routes API、Geocoding API、Places API（New）の有効化を確認してください。";
+  }
+
+
+  if (/BillingNotEnabled|billing/i.test(message)) {
+    return "Google Cloudプロジェクトの請求先設定を確認してください。";
+  }
+
+  if (/DIRECTIONS_STATUS: REQUEST_DENIED/.test(message)) {
+    return "Directions API（Legacy）は有効ですが、APIキーの使用が拒否されています。Google Cloudの「認証情報」→使用中のAPIキー→「APIの制限」にDirections API（Legacy）を追加し、同じプロジェクトのキーか確認してください。";
+  }
+
+  if (/DIRECTIONS_STATUS: OVER_QUERY_LIMIT/.test(message)) {
+    return "Directions APIの割り当て上限に達しています。Google Cloudの割り当て設定を確認してください。";
+  }
+
+  if (/DIRECTIONS_STATUS: ZERO_RESULTS/.test(message)) {
+    return "Googleは最寄り駅から狛江駅までの公共交通経路を返しませんでした。Google Mapsアプリで同じ駅間・同じ時刻の経路が表示されるか確認してください。";
+  }
+
+  if (/DIRECTIONS_STATUS: OK/.test(message)) {
+    return "Googleから経路は返りましたが、時刻・乗換情報の解析に失敗しました。表示された状態をお知らせください。";
+  }
+
+  return message;
+}
+</script>
+</body>
+</html>
