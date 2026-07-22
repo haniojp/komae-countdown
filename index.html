@@ -198,6 +198,7 @@ const state = {
   geocoder: null,
   Place: null,
   SearchNearbyRankPreference: null,
+  destinationPlace: null,
   position: null,
   result: null,
   busy: false,
@@ -467,10 +468,20 @@ async function buildTripPlan(position, minimumLeaveSeconds) {
     lng: position.coords.longitude
   };
 
-  const station = await findNearestRailStation(origin);
+  const [station, destinationPlace] = await Promise.all([
+    findNearestRailStation(origin),
+    getDestinationStationPlace()
+  ]);
+
   const walking = await computeWalkingRoute(origin, station.location);
 
-  if (isKomaeStation(station.name)) {
+  // 電車経路が失敗しても、取得済みの最寄り駅と徒歩時間は画面へ表示する。
+  renderPreliminaryStation(station, walking.durationMs);
+
+  if (
+    isKomaeStation(station.name) ||
+    (station.id && destinationPlace?.id && station.id === destinationPlace.id)
+  ) {
     const arrival = new Date(Date.now() + walking.durationMs);
 
     return {
@@ -487,6 +498,7 @@ async function buildTripPlan(position, minimumLeaveSeconds) {
 
   const transitRoutes = await findTransitRoutes(
     station,
+    destinationPlace,
     walking.durationMs,
     minimumLeaveSeconds
   );
@@ -495,11 +507,60 @@ async function buildTripPlan(position, minimumLeaveSeconds) {
 
   if (!selected) {
     throw new Error(
-      `最寄り駅は${station.name}ですが、同駅から狛江駅までの鉄道経路を取得できませんでした。`
+      `最寄り駅は${station.name}ですが、Googleから同駅発の狛江駅方面の経路が返されませんでした。`
     );
   }
 
   return selected;
+}
+
+async function getDestinationStationPlace() {
+  if (state.destinationPlace) return state.destinationPlace;
+
+  const response = await state.Place.searchByText({
+    textQuery: "狛江駅 東京都狛江市",
+    fields: [
+      "id",
+      "displayName",
+      "location",
+      "formattedAddress",
+      "types",
+      "primaryType"
+    ],
+    includedType: "train_station",
+    useStrictTypeFiltering: false,
+    language: "ja",
+    region: "jp",
+    maxResultCount: 5
+  });
+
+  const places = response.places || [];
+
+  const exact =
+    places.find(place => {
+      const name =
+        typeof place.displayName === "string"
+          ? place.displayName
+          : place.displayName?.text || "";
+      return name.replace(/\s/g, "").includes("狛江駅");
+    }) || places[0];
+
+  if (!exact) {
+    throw new Error(
+      "目的地の狛江駅をGoogle Placesから取得できませんでした。"
+    );
+  }
+
+  state.destinationPlace = exact;
+  return exact;
+}
+
+function renderPreliminaryStation(station, walkingMs) {
+  els.station.textContent = station.name;
+  els.walk.textContent =
+    `徒歩所要時間：${formatDuration(walkingMs)}`;
+  els.train.textContent = "電車時刻を検索中…";
+  els.leaveBy.textContent = "現在地の出発期限：計算中";
 }
 
 async function findNearestRailStation(origin) {
@@ -585,6 +646,7 @@ function placeToStation(place, origin) {
 
   return {
     id: place.id || null,
+    place,
     name: normalizeStationName(displayName),
     location,
     formattedAddress: place.formattedAddress || "",
@@ -664,6 +726,7 @@ async function computeWalkingRoute(origin, destination) {
 
 async function findTransitRoutes(
   station,
+  destinationPlace,
   walkingMs,
   minimumLeaveSeconds
 ) {
@@ -673,31 +736,86 @@ async function findTransitRoutes(
 
   let routes = await computeTransitRoutes(
     station,
+    destinationPlace,
     walkingMs,
     earliestStationArrival
   );
 
   if (routes.length === 0) {
-    const later = new Date(earliestStationArrival.getTime() + 15 * 60 * 1000);
-    routes = await computeTransitRoutes(station, walkingMs, later);
+    const later = new Date(
+      earliestStationArrival.getTime() + 15 * 60 * 1000
+    );
+
+    routes = await computeTransitRoutes(
+      station,
+      destinationPlace,
+      walkingMs,
+      later
+    );
   }
 
   return routes;
 }
 
-async function computeTransitRoutes(station, walkingMs, departureTime) {
-  const response = await state.Route.computeRoutes({
-    origin: station.location,
-    destination: DESTINATION_QUERY,
-    travelMode: "TRANSIT",
-    departureTime,
-    computeAlternativeRoutes: true,
-    fields: ["legs", "durationMillis", "localizedValues"]
-  });
+async function computeTransitRoutes(
+  station,
+  destinationPlace,
+  walkingMs,
+  departureTime
+) {
+  // Placeオブジェクトを使うと、駅の中心座標ではなく、
+  // Googleが保持する駅の乗降地点・アクセスポイントを考慮できる。
+  const attempts = [
+    {
+      origin: station.place,
+      destination: destinationPlace
+    },
+    {
+      origin: `${station.name}, 日本`,
+      destination: "狛江駅, 東京都狛江市, 日本"
+    },
+    {
+      origin: station.location,
+      destination: destinationPlace
+    }
+  ];
 
-  return (response.routes || [])
-    .map(route => parseTransitRoute(route, station, walkingMs))
-    .filter(Boolean);
+  let lastError = null;
+
+  for (const attempt of attempts) {
+    try {
+      const response = await state.Route.computeRoutes({
+        origin: attempt.origin,
+        destination: attempt.destination,
+        travelMode: "TRANSIT",
+        departureTime,
+        computeAlternativeRoutes: true,
+        transitPreference: {
+          routingPreference: "LESS_WALKING"
+        },
+        language: "ja-JP",
+        region: "jp",
+        fields: ["legs", "durationMillis", "localizedValues"]
+      });
+
+      const parsed = (response.routes || [])
+        .map(route => parseTransitRoute(route, station, walkingMs))
+        .filter(Boolean);
+
+      if (parsed.length > 0) {
+        return parsed;
+      }
+    } catch (error) {
+      console.warn("Transit route attempt failed:", error);
+      lastError = error;
+    }
+  }
+
+  if (lastError) {
+    console.warn("All transit route attempts failed:", lastError);
+  }
+
+  return [];
 }
 
 function parseTransitRoute(route, station, walkingMs) {
@@ -1073,6 +1191,10 @@ function humanizeError(error) {
 
   if (/ApiNotActivated|not activated|disabled/i.test(message)) {
     return "Google CloudでMaps JavaScript API、Routes API、Geocoding API、Places API（New）の有効化を確認してください。";
+  }
+
+  if (/Googleから同駅発の狛江駅方面の経路が返されませんでした/.test(message)) {
+    return message + " 時刻を変えて再検索するか、Google Mapsでも同じ経路が表示されるか確認してください。";
   }
 
   if (/BillingNotEnabled|billing/i.test(message)) {
