@@ -152,7 +152,7 @@
       <div class="dialog-head"><h2>Google APIキー設定</h2><button id="closeDialog" class="close">×</button></div>
       <label for="apiKey">Maps JavaScript APIキー</label>
       <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="AIza...">
-      <p class="note">この端末のSafari内だけに保存します。Google Cloud側でウェブサイト制限を設定し、Maps JavaScript API、Routes API、Geocoding API、Places API（New）だけを許可してください。</p>
+      <p class="note">この端末のSafari内だけに保存します。Google Cloud側でウェブサイト制限を設定し、Maps JavaScript API、Routes API、Geocoding API、Places API（New）、Directions API（Legacy）だけを許可してください。</p>
       <div class="dialog-actions">
         <button id="clearKey" class="smallbtn ghost">削除</button>
         <button id="saveKey" class="smallbtn save">保存</button>
@@ -199,6 +199,7 @@ const state = {
   Place: null,
   SearchNearbyRankPreference: null,
   destinationPlace: null,
+  directionsService: null,
   position: null,
   result: null,
   busy: false,
@@ -319,7 +320,8 @@ function loadMaps(key) {
     state.mapsLoaded &&
     state.Route &&
     state.Place &&
-    state.SearchNearbyRankPreference
+    state.SearchNearbyRankPreference &&
+    state.directionsService
   ) {
     return Promise.resolve();
   }
@@ -346,6 +348,7 @@ function loadMaps(key) {
         state.geocoder = new Geocoder();
         state.Place = Place;
         state.SearchNearbyRankPreference = SearchNearbyRankPreference;
+        state.directionsService = new google.maps.DirectionsService();
         state.mapsLoaded = true;
         resolve();
       } catch (error) {
@@ -734,117 +737,145 @@ async function findTransitRoutes(
     Date.now() + walkingMs + minimumLeaveSeconds * 1000
   );
 
-  let routes = await computeTransitRoutes(
-    station,
-    destinationPlace,
-    walkingMs,
-    earliestStationArrival
-  );
-
-  if (routes.length === 0) {
-    const later = new Date(
-      earliestStationArrival.getTime() + 15 * 60 * 1000
-    );
-
-    routes = await computeTransitRoutes(
-      station,
-      destinationPlace,
-      walkingMs,
-      later
-    );
-  }
-
-  return routes;
-}
-
-async function computeTransitRoutes(
-  station,
-  destinationPlace,
-  walkingMs,
-  departureTime
-) {
-  // Placeオブジェクトを使うと、駅の中心座標ではなく、
-  // Googleが保持する駅の乗降地点・アクセスポイントを考慮できる。
-  const attempts = [
-    {
-      origin: station.place,
-      destination: destinationPlace
-    },
-    {
-      origin: `${station.name}, 日本`,
-      destination: "狛江駅, 東京都狛江市, 日本"
-    },
-    {
-      origin: station.location,
-      destination: destinationPlace
-    }
+  const departureCandidates = [
+    earliestStationArrival,
+    new Date(earliestStationArrival.getTime() + 10 * 60 * 1000),
+    new Date(earliestStationArrival.getTime() + 20 * 60 * 1000)
   ];
 
-  let lastError = null;
+  const originCandidates = [
+    station.id ? { placeId: station.id } : null,
+    `${station.name}, 東京都, 日本`,
+    station.location
+  ].filter(Boolean);
 
-  for (const attempt of attempts) {
-    try {
-      const response = await state.Route.computeRoutes({
-        origin: attempt.origin,
-        destination: attempt.destination,
-        travelMode: "TRANSIT",
-        departureTime,
-        computeAlternativeRoutes: true,
-        transitPreference: {
-          routingPreference: "LESS_WALKING"
-        },
-        language: "ja-JP",
-        region: "jp",
-        fields: ["legs", "durationMillis", "localizedValues"]
-      });
+  const destinationCandidates = [
+    destinationPlace?.id ? { placeId: destinationPlace.id } : null,
+    "狛江駅, 東京都狛江市, 日本"
+  ].filter(Boolean);
 
-      const parsed = (response.routes || [])
-        .map(route => parseTransitRoute(route, station, walkingMs))
-        .filter(Boolean);
+  let lastStatus = null;
 
-      if (parsed.length > 0) {
-        return parsed;
+  for (const departureTime of departureCandidates) {
+    for (const origin of originCandidates) {
+      for (const destination of destinationCandidates) {
+        const result = await requestLegacyTransitDirections({
+          origin,
+          destination,
+          departureTime
+        });
+
+        lastStatus = result.status;
+
+        if (result.status === "OK" && result.response?.routes?.length) {
+          const parsed = result.response.routes
+            .map(route =>
+              parseLegacyTransitRoute(
+                route,
+                station,
+                walkingMs,
+                result.response
+              )
+            )
+            .filter(Boolean);
+
+          if (parsed.length > 0) {
+            return parsed;
+          }
+        }
       }
-    } catch (error) {
-      console.warn("Transit route attempt failed:", error);
-      lastError = error;
     }
   }
 
-  if (lastError) {
-    console.warn("All transit route attempts failed:", lastError);
-  }
-
+  console.warn("DirectionsService returned no usable transit route:", lastStatus);
   return [];
 }
 
-function parseTransitRoute(route, station, walkingMs) {
-  const steps = (route.legs || []).flatMap(leg => leg.steps || []);
-  const transitSteps = steps.filter(step => step.transitDetails);
+function requestLegacyTransitDirections({
+  origin,
+  destination,
+  departureTime
+}) {
+  return new Promise(resolve => {
+    const transitOptions = {
+      departureTime
+    };
+
+    if (google.maps.TransitRoutePreference?.FEWER_TRANSFERS) {
+      transitOptions.routingPreference =
+        google.maps.TransitRoutePreference.FEWER_TRANSFERS;
+    }
+
+    state.directionsService.route(
+      {
+        origin,
+        destination,
+        travelMode: google.maps.TravelMode.TRANSIT,
+        transitOptions,
+        provideRouteAlternatives: true,
+        region: "jp"
+      },
+      (response, status) => {
+        resolve({
+          response,
+          status: String(status)
+        });
+      }
+    );
+  });
+}
+
+function parseLegacyTransitRoute(
+  route,
+  station,
+  walkingMs,
+  directionsResponse
+) {
+  const legs = route.legs || [];
+  const steps = legs.flatMap(leg => leg.steps || []);
+  const transitSteps = steps.filter(step => step.transit);
 
   if (transitSteps.length === 0) return null;
 
-  const first = transitSteps[0].transitDetails;
-  const last = transitSteps[transitSteps.length - 1].transitDetails;
+  const firstTransit = transitSteps[0].transit;
+  const lastTransit = transitSteps[transitSteps.length - 1].transit;
 
-  const departure = toDate(first.departureTime);
-  const arrival = toDate(last.arrivalTime);
+  const departure = toDate(
+    firstTransit.departure_time?.value ||
+    legs[0]?.departure_time?.value
+  );
+
+  const arrival = toDate(
+    lastTransit.arrival_time?.value ||
+    legs[legs.length - 1]?.arrival_time?.value
+  );
 
   if (!departure || !arrival) return null;
 
   const leaveBy = new Date(departure.getTime() - walkingMs);
   const homeArrival = new Date(arrival.getTime() + 10 * 60 * 1000);
 
+  const agencies = new Map();
+
   const segments = transitSteps.map(step => {
-    const details = step.transitDetails;
-    const line = details.transitLine || {};
+    const details = step.transit || {};
+    const line = details.line || {};
+
+    for (const agency of line.agencies || []) {
+      if (agency?.name) {
+        agencies.set(agency.name, {
+          name: agency.name,
+          url: agency.url || null
+        });
+      }
+    }
 
     return {
-      from: details.departureStop?.name || station.name,
-      to: details.arrivalStop?.name || "降車駅不明",
-      departure: toDate(details.departureTime),
-      arrival: toDate(details.arrivalTime),
-      line: line.shortName || line.name || "路線名不明",
+      from: details.departure_stop?.name || station.name,
+      to: details.arrival_stop?.name || "降車駅不明",
+      departure: toDate(details.departure_time?.value),
+      arrival: toDate(details.arrival_time?.value),
+      line: line.short_name || line.name || "路線名不明",
       headsign: details.headsign || ""
     };
   });
@@ -857,7 +888,13 @@ function parseTransitRoute(route, station, walkingMs) {
     arrival,
     leaveBy,
     homeArrival,
-    segments
+    segments,
+    agencies: Array.from(agencies.values()),
+    warnings: Array.isArray(route.warnings) ? route.warnings : [],
+    copyrights:
+      route.copyrights ||
+      directionsResponse?.routes?.[0]?.copyrights ||
+      ""
   };
 }
 
@@ -1030,6 +1067,27 @@ function renderResult(result) {
     }
   ];
 
+  if (result.agencies?.length) {
+    items.push({
+      main: "運行事業者",
+      sub: result.agencies.map(agency => agency.name).join("・")
+    });
+  }
+
+  if (result.warnings?.length) {
+    items.push({
+      main: "経路に関する注意",
+      sub: result.warnings.join(" ")
+    });
+  }
+
+  if (result.copyrights) {
+    items.push({
+      main: "地図・経路データ",
+      sub: result.copyrights
+    });
+  }
+
   els.routeList.replaceChildren(...items.map(createRouteItem));
 }
 
@@ -1194,7 +1252,7 @@ function humanizeError(error) {
   }
 
   if (/Googleから同駅発の狛江駅方面の経路が返されませんでした/.test(message)) {
-    return message + " 時刻を変えて再検索するか、Google Mapsでも同じ経路が表示されるか確認してください。";
+    return message + " Google CloudでDirections API（Legacy）が有効か確認してください。";
   }
 
   if (/BillingNotEnabled|billing/i.test(message)) {
