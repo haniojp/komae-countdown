@@ -14,7 +14,7 @@
 </head>
 <body>
 <div class="app">
-<header class="top"><div><p class="eyebrow">SMART TRANSIT COUNTDOWN</p><h1>Transit Countdown <span class="ver">v17.2 FREE</span></h1></div><div class="badge">🆓</div></header>
+<header class="top"><div><p class="eyebrow">SMART TRANSIT COUNTDOWN</p><h1>Transit Countdown <span class="ver">v17.3 FREE</span></h1></div><div class="badge">🆓</div></header>
 <main>
 <section class="hero"><p class="label">現在地を出発するまで</p><output id="countdown" class="count idle">--:--:--</output><p id="hint" class="hint">現在地を取得してください</p></section><button id="research" class="btn research" hidden>🔄 次の電車をYahoo!で再検索</button>
 <button id="refresh" class="btn primary">⌖ 現在地・最寄り駅を取得</button><button id="walkMap" class="btn map" disabled>🗺 最寄り駅までの徒歩経路を地図で表示</button>
@@ -33,7 +33,7 @@
 </div>
 <script>
 "use strict";
-const VERSION="v17.1",STORE="transitCountdownV17State",LEGACY_STORES=["transitCountdownV16State","komaeFreeV15State"];
+const VERSION="v17.3",STORE="transitCountdownV17State",LEGACY_STORES=["transitCountdownV16State","komaeFreeV15State"];
 const GEO_CACHE_MS=600000,STATION_REUSE_METERS=1200;
 const OVERPASS=["https://overpass-api.de/api/interpreter","https://overpass.kumi.systems/api/interpreter"];
 const $=id=>document.getElementById(id);
@@ -46,7 +46,19 @@ function geoAttempt(options){return new Promise((resolve,reject)=>{navigator.geo
 async function geo(){if(!navigator.geolocation)throw new Error("GEO_UNSUPPORTED");try{return await geoAttempt({enableHighAccuracy:false,timeout:1200,maximumAge:GEO_CACHE_MS})}catch(err){if(err.message==="GEO_DENIED")throw err}try{return await geoAttempt({enableHighAccuracy:false,timeout:2500,maximumAge:60000})}catch(err){if(err.message==="GEO_DENIED")throw err}return geoAttempt({enableHighAccuracy:true,timeout:4000,maximumAge:30000})}
 function canReuseStation(lat,lon){return Boolean(s.stationName&&Number.isFinite(s.stationLat)&&Number.isFinite(s.stationLon)&&Number.isFinite(s.lastLat)&&Number.isFinite(s.lastLon)&&haversine({lat,lon},{lat:s.lastLat,lon:s.lastLon})<=STATION_REUSE_METERS)}
 async function reverse(p){const u=new URL("https://nominatim.openstreetmap.org/reverse");u.searchParams.set("format","jsonv2");u.searchParams.set("lat",p.coords.latitude);u.searchParams.set("lon",p.coords.longitude);u.searchParams.set("zoom","16");u.searchParams.set("addressdetails","1");u.searchParams.set("accept-language","ja");const r=await timeoutFetch(u.toString(),{},10000);if(!r.ok)throw new Error(`NOMINATIM_${r.status}`);const d=await r.json(),a=d.address||{};const parts=[a.province||a.state,a.city||a.town||a.village||a.county,a.city_district||a.suburb,a.quarter||a.neighbourhood||a.residential,a.road].filter(Boolean);return [...new Set(parts)].join("")||d.display_name||"地名を取得できません"}
-async function nearest(p){const lat=p.coords.latitude,lon=p.coords.longitude;for(const radius of [3000,7000,15000]){const q=`[out:json][timeout:18];(nwr(around:${radius},${lat},${lon})["railway"="station"];nwr(around:${radius},${lat},${lon})["public_transport"="station"]["train"="yes"];nwr(around:${radius},${lat},${lon})["station"="subway"];);out center tags;`;for(const ep of OVERPASS){try{const r=await timeoutFetch(ep,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8"},body:"data="+encodeURIComponent(q)},22000);if(!r.ok)continue;const d=await r.json(),st=choose(d.elements||[],lat,lon);if(st)return st}catch(err){console.warn(err)}}}throw new Error("STATION_NOT_FOUND")}
+async function nearest(p){
+ const lat=p.coords.latitude,lon=p.coords.longitude;
+ // Avoid serial server/radius retries that can block for minutes.
+ const radius=7000;
+ const q=`[out:json][timeout:7];(nwr(around:${radius},${lat},${lon})["railway"="station"];nwr(around:${radius},${lat},${lon})["public_transport"="station"]["train"="yes"];nwr(around:${radius},${lat},${lon})["station"="subway"];);out center tags;`;
+ const requests=OVERPASS.map(async ep=>{
+   const r=await timeoutFetch(ep,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8"},body:"data="+encodeURIComponent(q)},8500);
+   if(!r.ok)throw new Error(`OVERPASS_${r.status}`);
+   const d=await r.json();const st=choose(d.elements||[],lat,lon);
+   if(!st)throw new Error("STATION_NOT_FOUND");return st;
+ });
+ try{return await Promise.any(requests)}catch(err){throw new Error("STATION_NOT_FOUND")}
+}
 function choose(list,lat,lon){const seen=new Set(),arr=[];for(const x of list){const tags=x.tags||{},raw=tags["name:ja"]||tags.name,la=Number(x.lat??x.center?.lat),lo=Number(x.lon??x.center?.lon);if(!raw||!Number.isFinite(la)||!Number.isFinite(lo))continue;const name=raw.endsWith("駅")?raw:raw+"駅",key=name.replace(/\s/g,"");if(seen.has(key))continue;seen.add(key);arr.push({name,lat:la,lon:lo,distance:haversine({lat,lon},{lat:la,lon:lo})})}arr.sort((a,b)=>a.distance-b.distance);return arr[0]||null}
 function estimate(m){return Math.max(1,Math.round((m*1.28)/75))}
 function adjust(n){s.walkMinutes=Math.max(1,Math.min(60,s.walkMinutes+n));updateWalk();recalc();save()}
@@ -189,7 +201,7 @@ function fmt(v){return new Intl.DateTimeFormat("ja-JP",{hour:"2-digit",minute:"2
 function haversine(a,b){const R=6371000,rad=x=>x*Math.PI/180,dLat=rad(b.lat-a.lat),dLon=rad(b.lon-a.lon),la1=rad(a.lat),la2=rad(b.lat),v=Math.sin(dLat/2)**2+Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.sqrt(v))}
 async function timeoutFetch(url,opt,ms){const c=new AbortController(),t=setTimeout(()=>c.abort(),ms);try{return await fetch(url,{...opt,signal:c.signal})}finally{clearTimeout(t)}}
 function setStatus(msg,type){e.status.textContent=msg;e.status.className=`status ${type}`}
-function friendly(err){const m=err?.message||String(err);if(/GEO_DENIED/.test(m))return"Safariの位置情報が拒否されています。iPhoneの設定で許可してください。";if(/GEO_/.test(m))return"現在地を取得できません。位置情報設定と電波状況を確認してください。";if(/STATION_NOT_FOUND|OVERPASS|AbortError/.test(m))return"最寄り駅の無料データ取得に失敗しました。少し待って再実行してください。";return`${VERSION}: ${m}`}
+function friendly(err){const m=err?.message||String(err);if(/GEO_DENIED/.test(m))return"Safariの位置情報が拒否されています。iPhoneの設定で許可してください。";if(/GEO_/.test(m))return"現在地を取得できません。位置情報設定と電波状況を確認してください。";if(/STATION_NOT_FOUND|OVERPASS|AbortError/.test(m))return"駅検索サーバーから駅情報を取得できませんでした。時間を置いて再試行してください（測位自体は完了しています）。";return`${VERSION}: ${m}`}
 </script>
 </body>
 </html>
